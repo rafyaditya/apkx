@@ -124,6 +124,60 @@ def show_unauthorized_device_help(serial: str) -> None:
     console.print(Panel(help_text, title="[bold yellow]Izin USB Debugging Diperlukan[/bold yellow]", border_style="yellow"))
 
 
+def select_devices(device_details: List[dict]) -> Optional[List[dict]]:
+    """
+    If multiple authorized devices are connected, prompts user to select one or all.
+    Returns:
+      - None if user cancels (KeyboardInterrupt).
+      - List containing all device dicts if '[Semua Perangkat]' chosen.
+      - List containing single chosen device dict if specific device chosen.
+    """
+    authorized = [d for d in device_details if d.get("status") == "device"]
+    if not authorized:
+        return None
+    if len(authorized) == 1:
+        return authorized
+
+    choices = [
+        questionary.Choice(
+            title=f"[Semua Perangkat] (Ekstrak dari seluruh {len(authorized)} HP terhubung)",
+            value="ALL",
+        )
+    ]
+    for idx, d in enumerate(authorized, start=1):
+        serial = d.get("serial", "")
+        brand = d.get("brand", "")
+        model = d.get("model", "")
+        version = d.get("android_version", "")
+        if brand != "-" and model != "-":
+            label = f"{brand} {model}"
+        elif model != "-":
+            label = model
+        else:
+            label = serial
+
+        ver_str = f" - {version}" if version and version != "-" else ""
+        title = f"{idx}. {label} ({serial}){ver_str}"
+        choices.append(questionary.Choice(title=title, value=serial))
+
+    try:
+        selected_val = questionary.select(
+            f"Ditemukan {len(authorized)} perangkat Android terhubung. Pilih target:",
+            choices=choices,
+        ).ask()
+    except KeyboardInterrupt:
+        return None
+
+    if selected_val == "ALL":
+        return authorized
+    elif selected_val:
+        for d in authorized:
+            if d.get("serial") == selected_val:
+                return [d]
+
+    return None
+
+
 def select_device(devices: List[Tuple[str, str]]) -> Optional[str]:
     """If multiple authorized devices are connected, prompts user to select one."""
     if len(devices) == 1:

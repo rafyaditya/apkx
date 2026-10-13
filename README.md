@@ -94,13 +94,13 @@ apkx whatsapp --output C:\AnalisaAPK
 ```
 Menentukan lokasi folder penyimpanan output. Jika tidak ditentukan, output akan otomatis disimpan di folder `./output`.
 
-### 5. Memilih Perangkat Spesifik
+### 5. Memilih Perangkat Spesifik atau Multi-Perangkat
 ```powershell
 apkx -d EU99MJMVKREIWCDY
 # atau
 apkx --device emulator-5554
 ```
-Menentukan perangkat secara spesifik menggunakan Serial ID jika terdapat lebih dari satu perangkat Android yang terhubung ke komputer.
+Menentukan perangkat secara spesifik menggunakan Serial ID jika terdapat lebih dari satu ponsel yang terhubung. Jika opsi -d tidak disertakan saat beberapa ponsel tersambung, apkx akan menampilkan menu pilihan untuk memilih perangkat target atau opsi "[Semua Perangkat]" untuk memproses seluruh perangkat secara berurutan.
 
 ### 6. Menampilkan Daftar Aplikasi di Terminal (Non-Interaktif)
 ```powershell

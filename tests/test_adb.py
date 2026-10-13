@@ -46,6 +46,41 @@ class TestADBManager(unittest.TestCase):
         self.assertEqual(details["model"], "-")
         self.assertEqual(details["status"], "unauthorized")
 
+    def test_select_devices_single_device(self):
+        from apk_extractor.ui import select_devices
+        devs = [{"serial": "dev1", "status": "device", "brand": "Brand", "model": "M1"}]
+        res = select_devices(devs)
+        self.assertEqual(res, devs)
+
+    @patch("questionary.select")
+    def test_select_devices_all_option(self, mock_select):
+        from apk_extractor.ui import select_devices
+        mock_ask = MagicMock()
+        mock_ask.ask.return_value = "ALL"
+        mock_select.return_value = mock_ask
+
+        devs = [
+            {"serial": "dev1", "status": "device", "brand": "Brand1", "model": "M1"},
+            {"serial": "dev2", "status": "device", "brand": "Brand2", "model": "M2"},
+        ]
+        res = select_devices(devs)
+        self.assertEqual(res, devs)
+
+    @patch("questionary.select")
+    def test_select_devices_specific_option(self, mock_select):
+        from apk_extractor.ui import select_devices
+        mock_ask = MagicMock()
+        mock_ask.ask.return_value = "dev2"
+        mock_select.return_value = mock_ask
+
+        devs = [
+            {"serial": "dev1", "status": "device", "brand": "Brand1", "model": "M1"},
+            {"serial": "dev2", "status": "device", "brand": "Brand2", "model": "M2"},
+        ]
+        res = select_devices(devs)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["serial"], "dev2")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,8 +12,10 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+import click
 import questionary
 import typer
+from rich.panel import Panel
 from rich.status import Status
 
 from apk_extractor.adb import ADBError, ADBManager
@@ -24,6 +26,7 @@ from apk_extractor.ui import (
     console,
     print_banner,
     select_device,
+    select_devices,
     select_package_interactive,
     show_devices_table,
     show_error,
@@ -34,7 +37,55 @@ from apk_extractor.ui import (
     show_warning,
 )
 
-app = typer.Typer(
+
+class APKXTyper(typer.Typer):
+    """Custom Typer subclass providing clear, user-friendly error messages."""
+
+    def __call__(self, *args, **kwargs):
+        try:
+            return super().__call__(*args, standalone_mode=False, **kwargs)
+        except Exception as e:
+            if type(e).__name__ == "BadOptionUsage":
+                opt = getattr(e, "option_name", "opsi")
+                msg = f"[bold red]Kesalahan Argumen:[/] Opsi [cyan]{opt}[/] membutuhkan nilai argumen.\n\n"
+                if opt in ["-d", "--device"]:
+                    msg += (
+                        "[bold white]Penjelasan:[/]\n"
+                        "  Anda harus memasukkan Serial ID perangkat setelah opsi [cyan]-d[/].\n\n"
+                        "[bold white]Contoh Penggunaan:[/]\n"
+                        "  [green]apkx -d EU99MJMVKREIWCDY[/]\n\n"
+                        "[bold yellow]Tips:[/] Jalankan [bold green]apkx devices[/] untuk melihat daftar Serial ID perangkat yang terhubung."
+                    )
+                elif opt in ["-o", "--output"]:
+                    msg += (
+                        "[bold white]Penjelasan:[/]\n"
+                        "  Anda harus memasukkan path folder tujuan setelah opsi [cyan]-o[/].\n\n"
+                        "[bold white]Contoh Penggunaan:[/]\n"
+                        "  [green]apkx -o ./output[/] atau [green]apkx -o D:\\HasilEkstrak[/]"
+                    )
+                else:
+                    msg += f"Silakan jalankan [bold green]apkx --help[/] untuk melihat format penggunaan opsi [cyan]{opt}[/]."
+
+                console.print(Panel(msg, title="[bold red]Argumen Tidak Lengkap[/]", border_style="red"))
+                raise SystemExit(2)
+            elif type(e).__name__ == "NoSuchOption":
+                opt = getattr(e, "option_name", "opsi")
+                console.print(Panel(
+                    f"Opsi [cyan]{opt}[/] tidak dikenal.\n\n"
+                    "Silakan jalankan [bold green]apkx --help[/] untuk melihat daftar opsi yang valid.",
+                    title="[bold red]Opsi Tidak Dikenal[/]",
+                    border_style="red",
+                ))
+                raise SystemExit(2)
+            elif type(e).__name__ in ["Exit", "Abort"]:
+                raise SystemExit(getattr(e, "exit_code", 0))
+            elif isinstance(e, click.ClickException):
+                console.print(Panel(str(e), title="[bold red]Kesalahan Perintah[/]", border_style="red"))
+                raise SystemExit(getattr(e, "exit_code", 1))
+            raise e
+
+
+app = APKXTyper(
     name="apkx",
     help="apkx: Android APK & Split-APK Extractor CLI",
     add_completion=False,
@@ -137,48 +188,104 @@ def main(
             show_no_device_help()
         raise typer.Exit(code=1)
 
-    # Pilih device jika ada beberapa
-    target_device = device_id
-    if not target_device:
-        if len(authorized) == 1:
-            target_device = authorized[0][0]
-        else:
-            target_device = select_device(authorized)
-            if not target_device:
-                console.print("[dim]Pemilihan perangkat dibatalkan.[/dim]")
-                raise typer.Exit(code=0)
+    # Tentukan perangkat yang akan diproses
+    if device_id:
+        target_devices = [{"serial": device_id, "brand": "-", "model": "-", "android_version": "-", "status": "device"}]
+    elif len(authorized) == 1:
+        target_devices = [adb.get_device_details(authorized[0][0], "device")]
+    else:
+        print_banner()
+        all_details = adb.get_devices_with_details()
+        selected_devs = select_devices(all_details)
+        if not selected_devs:
+            console.print("[dim]Pemilihan perangkat dibatalkan.[/dim]")
+            raise typer.Exit(code=0)
+        target_devices = selected_devs
 
+    is_multi = len(target_devices) > 1
+    for dev_idx, dev_info in enumerate(target_devices, start=1):
+        target_device = dev_info["serial"]
+        brand = dev_info.get("brand", "")
+        model = dev_info.get("model", "")
+        if brand != "-" and model != "-":
+            device_label = f"{brand} {model}"
+        elif model != "-":
+            device_label = model
+        else:
+            device_label = target_device
+
+        if is_multi:
+            console.print(Panel(
+                f"[bold cyan]Memproses Perangkat {dev_idx}/{len(target_devices)}:[/] [bold green]{device_label}[/] [dim]({target_device})[/dim]",
+                border_style="cyan",
+            ))
+            cur_output_dir = output_dir / sanitize_filename(device_label)
+        else:
+            cur_output_dir = output_dir
+
+        process_single_device(
+            adb=adb,
+            packager=packager,
+            target_device=target_device,
+            device_label=device_label,
+            query=query,
+            all_apps=all_apps,
+            list_only=list_only,
+            output_dir=cur_output_dir,
+            is_multi=is_multi,
+        )
+
+        if is_multi and dev_idx < len(target_devices):
+            console.print(f"\n[dim]Selesai memproses {device_label}. Lanjut ke perangkat berikutnya...[/dim]\n")
+
+
+def process_single_device(
+    adb: ADBManager,
+    packager: APKPackager,
+    target_device: str,
+    device_label: str,
+    query: Optional[str],
+    all_apps: bool,
+    list_only: bool,
+    output_dir: Path,
+    is_multi: bool,
+) -> None:
+    """Processes package listing, selection, and extraction for a specific device."""
     # 3. Ambil daftar package dan nama aplikasi dari perangkat
-    with console.status("[bold cyan]Mengambil daftar aplikasi dari perangkat...[/bold cyan]"):
+    with console.status(f"[bold cyan]Mengambil daftar aplikasi dari {device_label}...[/bold cyan]"):
         try:
             packages = adb.list_packages(device_id=target_device, third_party_only=not all_apps)
             apps = resolve_apps(adb, packages, device_id=target_device)
         except ADBError as e:
-            print_banner()
+            if not is_multi:
+                print_banner()
             show_error(str(e))
-            raise typer.Exit(code=1)
+            return
 
     if not apps:
-        print_banner()
+        if not is_multi:
+            print_banner()
         app_type = "pihak ketiga" if not all_apps else "sistem"
-        show_warning(f"Tidak ada aplikasi {app_type} yang ditemukan di perangkat.")
-        raise typer.Exit(code=0)
+        show_warning(f"Tidak ada aplikasi {app_type} yang ditemukan di perangkat {device_label}.")
+        return
 
     # Jika hanya ingin menampilkan daftar (mode --list)
     if list_only:
-        print_banner()
+        if not is_multi:
+            print_banner()
         show_package_table(
             apps,
-            title=f"Daftar Aplikasi ({len(apps)} terpasang, Device: {target_device})",
+            title=f"Daftar Aplikasi ({len(apps)} terpasang, Device: {device_label})",
         )
-        raise typer.Exit(code=0)
+        return
 
     # 4. Tentukan aplikasi dan tindakan yang dipilih
     selected_app: Optional[AppInfo] = None
     selected_action: Optional[str] = None
 
     if query:
-        print_banner()
+        if not is_multi:
+            print_banner()
         query_clean = query.strip().lower()
         exact_matches = [
             a for a in apps
@@ -206,8 +313,8 @@ def main(
                     if pkg:
                         selected_app = next((a for a in apps if a.package_name == pkg), None)
             else:
-                show_warning(f"Tidak ada aplikasi yang cocok dengan kata kunci '{query}'.")
-                confirm = questionary.confirm("Apakah Anda ingin mencari dari seluruh daftar aplikasi?").ask()
+                show_warning(f"Tidak ada aplikasi yang cocok dengan kata kunci '{query}' di {device_label}.")
+                confirm = questionary.confirm(f"Apakah Anda ingin mencari dari seluruh daftar aplikasi di {device_label}?").ask()
                 if confirm:
                     try:
                         tui_res = run_tui_selector(apps, device_id=target_device)
@@ -218,7 +325,7 @@ def main(
                         if pkg:
                             selected_app = next((a for a in apps if a.package_name == pkg), None)
                 else:
-                    raise typer.Exit(code=0)
+                    return
 
         # Jika terpilih lewat query tanpa TUI modal, tanyakan tindakan
         if selected_app and not selected_action:
@@ -232,7 +339,7 @@ def main(
             ).ask()
             if not action_choice:
                 console.print("[dim]Operasi dibatalkan.[/dim]")
-                raise typer.Exit(code=0)
+                return
             selected_action = action_choice
     else:
         # Mode interaktif default: TUI dengan Action Modal
@@ -246,8 +353,11 @@ def main(
                 selected_app = next((a for a in apps if a.package_name == pkg), None)
 
     if not selected_app:
-        console.print("[dim]Operasi dibatalkan.[/dim]")
-        raise typer.Exit(code=0)
+        if is_multi:
+            console.print(f"[dim]Pemilihan aplikasi untuk {device_label} dilewati.[/dim]\n")
+        else:
+            console.print("[dim]Operasi dibatalkan.[/dim]")
+        return
 
     if not selected_action:
         selected_action = "both"
@@ -265,11 +375,11 @@ def main(
             apk_paths = adb.get_package_apk_paths(selected_app.package_name, device_id=target_device)
     except ADBError as e:
         show_error(str(e))
-        raise typer.Exit(code=1)
+        return
 
     if not apk_paths:
         show_error(f"Tidak dapat menemukan path APK untuk '{selected_app.app_name}' ({selected_app.package_name}).")
-        raise typer.Exit(code=1)
+        return
 
     # 6. Tarik file APK dari HP
     try:
@@ -322,7 +432,6 @@ def main(
 
     except (ADBError, ValueError, IOError) as e:
         show_error(f"Terjadi kesalahan saat memproses APK:\n{str(e)}")
-        raise typer.Exit(code=1)
 
 
 def query_matches_handled(action: str) -> bool:
