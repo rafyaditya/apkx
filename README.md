@@ -29,6 +29,14 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
 
 ---
 
+## Prasyarat Sistem
+
+1. **Python**: Python versi 3.10 atau yang lebih baru (pastikan opsi "Add python.exe to PATH" aktif saat instalasi di Windows).
+2. **Git**: Git terpasang di sistem untuk mengambil repositori.
+3. **Koneksi Internet**: Diperlukan saat instalasi pertama kali untuk mengunduh package dan binary ADB resmi dari Google.
+
+---
+
 ## Cara Instalasi Global
 
 Cukup jalankan satu baris perintah ini di terminal (PowerShell / CMD / Bash):
