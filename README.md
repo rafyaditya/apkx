@@ -64,33 +64,70 @@ pipx install git+https://github.com/rafyaditya/apkx.git
 
 ## Cara Penggunaan
 
-### 1. Mode Interaktif Penuh (Rekomendasi)
+### 1. Mode Interaktif Penuh (TUI Dashboard)
 ```powershell
 apkx
 ```
-*Gunakan panah untuk memilih, ketik huruf untuk mencari, dan tekan **Enter** untuk memunculkan pilihan tindakan.*
+Membuka antarmuka TUI interaktif layar penuh. Gunakan tombol panah atas/bawah untuk bernavigasi, ketik kata kunci untuk mencari secara instan, dan tekan Enter untuk membuka menu tindakan (Ambil APK, Ekstrak Isi, atau Keduanya). Tekan tombol Esc untuk keluar.
 
-### 2. Memilih Langsung dengan Nama Aplikasi
-```powershell
-apkx easybudget
-# atau
-apkx whatsapp
-```
-
-### 3. Menampilkan Daftar Perangkat yang Terhubung
+### 2. Memeriksa Perangkat yang Terhubung
 ```powershell
 apkx devices
 # atau
 apkx --devices
 ```
-*Menampilkan tabel daftar perangkat yang terhubung lengkap dengan Merk, Model HP, Versi Android, dan status izin USB Debugging.*
+Menampilkan tabel perangkat Android yang terhubung lengkap dengan Serial ID, Merk & Model HP, Versi OS, dan status izin USB Debugging.
 
-### 4. Menampilkan Daftar Aplikasi di Terminal
+### 3. Ekstraksi Cepat dengan Nama atau Package
+```powershell
+apkx whatsapp
+# atau
+apkx com.google.android.youtube
+```
+Langsung mencari aplikasi yang cocok dan mengekstraknya tanpa perlu mencari manual di daftar panjang.
+
+### 4. Menentukan Direktori Penyimpanan Custom
+```powershell
+apkx -o D:\HasilEkstrak
+# atau
+apkx whatsapp --output C:\AnalisaAPK
+```
+Menentukan lokasi folder penyimpanan output. Jika tidak ditentukan, output akan otomatis disimpan di folder `./output`.
+
+### 5. Memilih Perangkat Spesifik
+```powershell
+apkx -d EU99MJMVKREIWCDY
+# atau
+apkx --device emulator-5554
+```
+Menentukan perangkat secara spesifik menggunakan Serial ID jika terdapat lebih dari satu perangkat Android yang terhubung ke komputer.
+
+### 6. Menampilkan Daftar Aplikasi di Terminal (Non-Interaktif)
 ```powershell
 apkx --list
+# atau
+apkx -l
 ```
+Mencetak seluruh daftar aplikasi terpasang langsung ke layar terminal dalam bentuk tabel ringkas tanpa membuka TUI.
 
-### 5. Menyertakan Aplikasi Bawaan Sistem
+### 7. Menyertakan Aplikasi Bawaan Sistem (System Apps)
 ```powershell
 apkx -a
+# atau dikombinasikan dengan pencarian:
+apkx -a camera
 ```
+Secara default, apkx hanya menampilkan aplikasi pihak ketiga. Gunakan opsi `-a` atau `--all` untuk menyertakan seluruh aplikasi bawaan sistem Android.
+
+---
+
+## Ringkasan Argumen dan Opsi (CLI Reference)
+
+| Argumen / Opsi | Alias | Tipe | Keterangan |
+| :--- | :--- | :--- | :--- |
+| `[query]` | - | String | Nama aplikasi atau potongan Package ID (opsional). Jika dikosongkan, membuka mode interaktif TUI. |
+| `--devices` | - | Flag | Menampilkan tabel daftar perangkat Android yang terhubung ke komputer. |
+| `--output` | `-o` | Path | Direktori utama penyimpanan hasil (default: `./output`). |
+| `--device` | `-d` | String | Serial ID perangkat spesifik jika ada lebih dari satu ponsel terhubung. |
+| `--list` | `-l` | Flag | Menampilkan daftar aplikasi di terminal tanpa melakukan ekstraksi. |
+| `--all` | `-a` | Flag | Menyertakan seluruh aplikasi sistem (default: hanya aplikasi pihak ketiga). |
+| `--help` | - | Flag | Menampilkan bantuan ringkas seluruh perintah dan opsi yang tersedia. |
