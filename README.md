@@ -31,19 +31,19 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
 
 ## 📦 Cara Instalasi Global
 
-### Cara 1: Install Langsung dari GitHub (Rekomendasi untuk Komputer Lain)
-Cukup jalankan satu baris perintah ini di terminal (PowerShell / CMD / Terminal):
+### Cara 1: Install Langsung dari Repositori Private (Komputer Lain)
+Jalankan satu baris perintah ini di terminal (PowerShell / CMD / Terminal):
 ```bash
-pip install git+https://github.com/USERNAME/apk-download-and-extract.git
+pip install git+https://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@github.com/rafyaditya/apkx.git
 ```
 *Atau menggunakan `pipx` (alat CLI terisolasi):*
 ```bash
-pipx install git+https://github.com/USERNAME/apk-download-and-extract.git
+pipx install git+https://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@github.com/rafyaditya/apkx.git
 ```
 
 ### Cara 2: Install dari Kode Sumber Lokal (Development)
 ```bash
-git clone https://github.com/USERNAME/apk-download-and-extract.git
+git clone https://github.com/rafyaditya/apkx.git
 cd apk-download-and-extract
 pip install -e .
 ```
