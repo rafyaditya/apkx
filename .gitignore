@@ -1,0 +1,31 @@
+# Output Ekstraksi APK & Unpack
+output/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Distribution / Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Temporary Files
+.DS_Store
+Thumbs.db
