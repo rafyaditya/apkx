@@ -29,3 +29,7 @@ ENV/
 # OS Temporary Files
 .DS_Store
 Thumbs.db
+
+# Catatan & Panduan Lokal Pribadi
+panduan_kali_linux.txt
+*.local.txt
