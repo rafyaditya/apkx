@@ -25,6 +25,27 @@ class TestADBManager(unittest.TestCase):
         self.assertEqual(devices[0], ("EU99MJMVKREIWCDY", "device"))
         self.assertEqual(devices[1], ("emulator-5554", "unauthorized"))
 
+    @patch("subprocess.run")
+    def test_get_device_details(self, mock_run):
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "realme\nRMX2180\n10\n"
+        mock_run.return_value = mock_proc
+
+        manager = ADBManager(adb_path="mock_adb")
+        details = manager.get_device_details("EU99MJMVKREIWCDY", "device")
+        self.assertEqual(details["brand"], "Realme")
+        self.assertEqual(details["model"], "RMX2180")
+        self.assertEqual(details["android_version"], "Android 10")
+        self.assertEqual(details["status"], "device")
+
+    def test_get_device_details_unauthorized(self):
+        manager = ADBManager(adb_path="mock_adb")
+        details = manager.get_device_details("emulator-5554", "unauthorized")
+        self.assertEqual(details["brand"], "-")
+        self.assertEqual(details["model"], "-")
+        self.assertEqual(details["status"], "unauthorized")
+
 
 if __name__ == "__main__":
     unittest.main()

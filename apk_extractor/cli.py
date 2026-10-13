@@ -25,6 +25,7 @@ from apk_extractor.ui import (
     print_banner,
     select_device,
     select_package_interactive,
+    show_devices_table,
     show_error,
     show_no_device_help,
     show_package_table,
@@ -70,6 +71,11 @@ def main(
         "-l",
         help="Hanya tampilkan daftar aplikasi tanpa melakukan ekstraksi",
     ),
+    show_devices: bool = typer.Option(
+        False,
+        "--devices",
+        help="Tampilkan daftar perangkat Android yang terhubung ke komputer",
+    ),
 ) -> None:
     """
     Ekstrak file APK dari HP Android ke komputer dengan cepat dan rapi.
@@ -90,6 +96,22 @@ def main(
             )
             raise typer.Exit(code=1)
         console.print("[green][V] Android Platform-Tools resmi dari Google berhasil dipasang![/green]\n")
+
+    # 1.5 Cek perintah melihat perangkat (apkx devices / apkx --devices)
+    if query == "devices" or show_devices:
+        print_banner()
+        try:
+            device_list = adb.get_devices_with_details()
+        except ADBError as e:
+            show_error(str(e))
+            raise typer.Exit(code=1)
+
+        if not device_list:
+            show_no_device_help()
+            raise typer.Exit(code=0)
+
+        show_devices_table(device_list)
+        raise typer.Exit(code=0)
 
     # 2. Periksa perangkat terhubung
     try:

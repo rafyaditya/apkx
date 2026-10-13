@@ -149,6 +149,57 @@ class ADBManager:
                 devices.append((parts[0], parts[1]))
         return devices
 
+    def get_device_details(self, serial: str, status: str) -> dict:
+        """
+        Retrieves hardware details (brand, model, Android version) for a device.
+        """
+        info = {
+            "serial": serial,
+            "status": status,
+            "brand": "-",
+            "model": "-",
+            "android_version": "-",
+        }
+        if status != "device":
+            return info
+
+        try:
+            cmd = self._build_base_cmd(serial)
+            cmd.extend([
+                "shell",
+                "getprop ro.product.brand; getprop ro.product.model; getprop ro.build.version.release",
+            ])
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=4,
+                check=False,
+            )
+            if res.returncode == 0:
+                lines = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
+                if len(lines) >= 1 and lines[0]:
+                    info["brand"] = lines[0].capitalize()
+                if len(lines) >= 2 and lines[1]:
+                    info["model"] = lines[1]
+                if len(lines) >= 3 and lines[2]:
+                    info["android_version"] = f"Android {lines[2]}"
+        except Exception:
+            pass
+
+        return info
+
+    def get_devices_with_details(self) -> List[dict]:
+        """
+        Returns a list of dictionaries containing device serial, status, and properties.
+        """
+        devices = self.get_connected_devices()
+        results = []
+        for serial, status in devices:
+            results.append(self.get_device_details(serial, status))
+        return results
+
     def _build_base_cmd(self, device_id: Optional[str] = None) -> List[str]:
         cmd = [self.adb_bin]
         if device_id:

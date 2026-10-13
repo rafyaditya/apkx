@@ -58,9 +58,58 @@ def show_no_device_help() -> None:
         "  1. Pastikan HP terhubung ke komputer menggunakan kabel USB.\n"
         "  2. Pastikan [bold cyan]USB Debugging[/bold cyan] sudah aktif di menu Developer Options.\n"
         "  3. Cek notifikasi di layar HP dan pilih [bold cyan]Allow / Izinkan USB debugging[/bold cyan].\n"
-        "  4. Cek koneksi di terminal dengan perintah: [bold green]adb devices[/bold green]\n"
+        "  4. Cek koneksi di terminal dengan perintah: [bold green]apkx devices[/bold green]\n"
     )
     console.print(Panel(help_text, title="[bold red]Perangkat Tidak Ditemukan[/bold red]", border_style="red"))
+
+
+def show_devices_table(devices: List[dict]) -> None:
+    """Displays connected Android devices in a styled Rich table."""
+    table = Table(title="Daftar Perangkat Android Terhubung", border_style="cyan")
+    table.add_column("No", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Serial ID", style="bold white")
+    table.add_column("Merk & Model", style="bold yellow")
+    table.add_column("Versi OS", style="cyan")
+    table.add_column("Status", justify="center")
+
+    has_unauthorized = False
+
+    for idx, d in enumerate(devices, start=1):
+        status_raw = d.get("status", "")
+        if status_raw == "device":
+            status_display = "[bold green][V] Siap Digunakan[/bold green]"
+        elif status_raw == "unauthorized":
+            status_display = "[bold yellow][!] Perlu Izin HP[/bold yellow]"
+            has_unauthorized = True
+        elif status_raw == "offline":
+            status_display = "[bold red][X] Offline[/bold red]"
+        else:
+            status_display = f"[dim]{status_raw}[/dim]"
+
+        brand = d.get("brand", "-")
+        model = d.get("model", "-")
+        if brand != "-" and model != "-":
+            device_label = f"{brand} {model}"
+        elif model != "-":
+            device_label = model
+        else:
+            device_label = brand
+
+        table.add_row(
+            str(idx),
+            d.get("serial", "-"),
+            device_label,
+            d.get("android_version", "-"),
+            status_display,
+        )
+
+    console.print(table)
+
+    if has_unauthorized:
+        console.print(
+            "\n[bold yellow]Catatan:[/bold yellow] Terdapat perangkat berstatus '[!] Perlu Izin HP'.\n"
+            "Buka kunci layar HP Anda dan pilih '[bold cyan]Allow / Izinkan USB debugging[/bold cyan]' agar dapat diakses.\n"
+        )
 
 
 def show_unauthorized_device_help(serial: str) -> None:

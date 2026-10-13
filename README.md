@@ -57,7 +57,7 @@ pipx install git+https://github.com/rafyaditya/apkx.git
 2. Sambungkan HP ke PC via kabel USB dan pilih **Allow / Izinkan USB Debugging**.
 3. Cek koneksi di terminal:
    ```powershell
-   adb devices
+   apkx devices
    ```
 
 ---
@@ -77,12 +77,20 @@ apkx easybudget
 apkx whatsapp
 ```
 
-### 3. Menampilkan Daftar Aplikasi di Terminal
+### 3. Menampilkan Daftar Perangkat yang Terhubung
+```powershell
+apkx devices
+# atau
+apkx --devices
+```
+*Menampilkan tabel daftar perangkat yang terhubung lengkap dengan Merk, Model HP, Versi Android, dan status izin USB Debugging.*
+
+### 4. Menampilkan Daftar Aplikasi di Terminal
 ```powershell
 apkx --list
 ```
 
-### 4. Menyertakan Aplikasi Bawaan Sistem
+### 5. Menyertakan Aplikasi Bawaan Sistem
 ```powershell
 apkx -a
 ```
