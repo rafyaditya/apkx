@@ -27,6 +27,7 @@ custom_theme = Theme({
 })
 
 console = Console(theme=custom_theme)
+console_err = Console(theme=custom_theme, stderr=True)
 
 
 def print_banner() -> None:
@@ -277,6 +278,46 @@ def show_success_summary(
         table.add_row("Teknologi", f"[bold magenta]{framework_info.get('framework', '-')}[/bold magenta]")
         table.add_row("Lokasi Kode", f"[white]{framework_info.get('code_path', '-')}[/white]")
         table.add_row("Keterangan", f"[dim]{framework_info.get('description', '-')}[/dim]")
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def show_app_info(info: dict) -> None:
+    """Menampilkan tabel informasi teknis dan audit aplikasi."""
+    app_name = info.get("app_name", info.get("package_name", "-"))
+    table = Table(title=f"[bold cyan]Informasi & Audit Aplikasi: {app_name}[/bold cyan]", border_style="cyan", show_header=False)
+    table.add_column("Key", style="bold cyan")
+    table.add_column("Value", style="white")
+
+    table.add_row("Nama Aplikasi", f"[bold green]{app_name}[/bold green]")
+    table.add_row("Package ID", info.get("package_name", "-"))
+    table.add_row("Versi Aplikasi", f"{info.get('version_name', '-')} (VersionCode: {info.get('version_code', '-')})")
+    table.add_row("Target / Min SDK", f"Target: {info.get('target_sdk', '-')} | Min: {info.get('min_sdk', '-')}")
+
+    if info.get("installed_time") and info.get("installed_time") != "-":
+        table.add_row("Waktu Install", str(info.get("installed_time")))
+    if info.get("updated_time") and info.get("updated_time") != "-":
+        table.add_row("Waktu Update", str(info.get("updated_time")))
+
+    table.add_row("Format APK", info.get("apk_format", "-"))
+    paths = info.get("apk_paths", [])
+    if paths:
+        table.add_row("Lokasi APK di HP", "\n".join(paths))
+
+    if info.get("launcher_activity") and info.get("launcher_activity") != "-":
+        table.add_row("Launcher Activity", info.get("launcher_activity"))
+
+    if info.get("framework") and info.get("framework") != "-":
+        table.add_row("Teknologi/Framework", f"[bold magenta]{info.get('framework')}[/bold magenta]")
+
+    perms = info.get("permissions", [])
+    if perms:
+        perm_display = "\n".join(f"• {p}" for p in perms[:10])
+        if len(perms) > 10:
+            perm_display += f"\n... dan {len(perms) - 10} izin lainnya"
+        table.add_row("Izin (Permissions)", perm_display)
 
     console.print()
     console.print(table)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apkx"
-version = "0.1.0"
+version = "1.0.0"
 description = "Fast, interactive CLI tool to pull and extract APKs (including Split APKs) from Android devices"
 readme = "README.md"
 authors = [{ name = "Developer" }]

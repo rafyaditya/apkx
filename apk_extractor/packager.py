@@ -2,6 +2,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -9,6 +10,78 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from apk_extractor.adb import ADBManager
+from apk_extractor.app_names import extract_apk_label, save_to_app_cache
+
+WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+
+
+def sanitize_archive_member_path(member_path: str) -> Path:
+    """
+    Sanitizes archive member paths to prevent Zip Slip and Windows reserved names (CON, PRN, AUX, etc.).
+    """
+    parts = []
+    for part in Path(member_path).parts:
+        if part in ("..", "/", "\\", ""):
+            continue
+        if sys.platform == "win32":
+            p_stem = Path(part).stem.upper()
+            if p_stem in WINDOWS_RESERVED_NAMES:
+                part = f"_{part}"
+        parts.append(part)
+    return Path(*parts) if parts else Path()
+
+
+def safe_extract_zip(
+    zf: zipfile.ZipFile,
+    target_dir: Path,
+    progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    task_label: str = "Mengekstrak berkas",
+) -> int:
+    """
+    Safely extracts all members from a ZipFile into target_dir.
+    Guards against Zip Slip and Windows reserved device names (PRN, CON, AUX, etc.).
+    Returns the total number of files extracted.
+    """
+    target_dir = target_dir.resolve()
+    members = zf.infolist()
+    total_members = len(members)
+    extracted_count = 0
+
+    for idx, member in enumerate(members, start=1):
+        clean_rel_path = sanitize_archive_member_path(member.filename)
+        if not clean_rel_path.parts:
+            continue
+
+        dest_path = (target_dir / clean_rel_path).resolve()
+        try:
+            dest_path.relative_to(target_dir)
+        except ValueError:
+            continue
+
+        if progress_callback and (idx % 25 == 0 or idx == total_members):
+            progress_callback(f"{task_label} ({idx}/{total_members}): {clean_rel_path.name}...", idx, total_members)
+
+        if member.is_dir() or member.filename.endswith("/"):
+            dest_path.mkdir(parents=True, exist_ok=True)
+        else:
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            dest_str = str(dest_path)
+            if sys.platform == "win32" and not dest_str.startswith("\\\\?\\"):
+                dest_str = f"\\\\?\\{dest_str}"
+
+            try:
+                with zf.open(member) as src, open(dest_str, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            except Exception:
+                with zf.open(member) as src, open(dest_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            extracted_count += 1
+
+    return extracted_count
 
 
 def sanitize_filename(name: str) -> str:
@@ -79,6 +152,23 @@ class APKPackager:
 
             self.adb.pull_file(remote_path, str(dest_file), device_id=device_id)
 
+            # Auto-resolusi nama resmi dari APK jika tersedia
+            official_label = extract_apk_label(dest_file)
+            if official_label:
+                save_to_app_cache(package_name, official_label)
+                if official_label != display_name:
+                    display_name = official_label
+                    new_file_base = sanitize_filename(display_name)
+                    new_dest_file = output_dir / f"{new_file_base}.apk"
+                    if new_dest_file != dest_file:
+                        try:
+                            if new_dest_file.exists():
+                                new_dest_file.unlink()
+                            dest_file.rename(new_dest_file)
+                            dest_file = new_dest_file
+                        except Exception:
+                            pass
+
             size_bytes = dest_file.stat().st_size
             return ExtractionResult(
                 package_name=package_name,
@@ -103,6 +193,15 @@ class APKPackager:
                 self.adb.pull_file(remote_path, str(local_part_path), device_id=device_id)
                 pulled_files.append(local_part_path)
 
+            # Auto-resolusi nama resmi dari base.apk jika tersedia
+            base_apk = next((f for f in pulled_files if "base" in f.name.lower()), pulled_files[0])
+            official_label = extract_apk_label(base_apk)
+            if official_label:
+                save_to_app_cache(package_name, official_label)
+                if official_label != display_name:
+                    display_name = official_label
+                    file_base_name = sanitize_filename(display_name)
+
             apks_bundle_path = output_dir / f"{file_base_name}.apks"
             if progress_callback:
                 progress_callback(f"Mengemas {total_parts} split APK ke dalam {apks_bundle_path.name}...", total_parts, total_parts)
@@ -124,32 +223,60 @@ class APKPackager:
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def unpack(self, archive_path: Path, target_dir: Path) -> Path:
+    def unpack(
+        self,
+        archive_path: Path,
+        target_dir: Path,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    ) -> Path:
         """
         Membongkar isi file .apk atau .apks ke dalam target_dir.
-        - Jika .apk: langsung diekstrak (classes.dex, assets/, res/, lib/, AndroidManifest.xml).
-        - Jika .apks: mengekstrak seluruh pecahan APK, di mana base.apk dibongkar ke subfolder base/.
+        - Jika .apk: langsung diekstrak secara aman.
+        - Jika .apks: mengekstrak seluruh pecahan APK, di mana tiap split dibongkar ke subfolder.
         """
         target_dir.mkdir(parents=True, exist_ok=True)
 
         if archive_path.suffix.lower() == ".apk":
             # Ekstrak langsung file APK tunggal
             with zipfile.ZipFile(archive_path, "r") as zf:
-                zf.extractall(target_dir)
+                safe_extract_zip(
+                    zf,
+                    target_dir,
+                    progress_callback=progress_callback,
+                    task_label=f"Mengekstrak {archive_path.name}",
+                )
 
         elif archive_path.suffix.lower() == ".apks":
             # Ekstrak paket APKS ke temporary
             temp_split_dir = Path(tempfile.mkdtemp(prefix="apkx_unpack_apks_"))
             try:
                 with zipfile.ZipFile(archive_path, "r") as bundle_zf:
-                    bundle_zf.extractall(temp_split_dir)
+                    safe_extract_zip(
+                        bundle_zf,
+                        temp_split_dir,
+                        progress_callback=progress_callback,
+                        task_label="Membuka bundle APKS",
+                    )
 
-                for split_file in temp_split_dir.glob("*.apk"):
+                split_files = sorted(list(temp_split_dir.glob("*.apk")))
+                total_splits = len(split_files)
+                for split_idx, split_file in enumerate(split_files, start=1):
                     subfolder_name = split_file.stem
                     sub_out_dir = target_dir / subfolder_name
                     sub_out_dir.mkdir(parents=True, exist_ok=True)
+                    if progress_callback:
+                        progress_callback(
+                            f"Mengekstrak split ({split_idx}/{total_splits}): {split_file.name}",
+                            split_idx,
+                            total_splits,
+                        )
                     with zipfile.ZipFile(split_file, "r") as split_zf:
-                        split_zf.extractall(sub_out_dir)
+                        safe_extract_zip(
+                            split_zf,
+                            sub_out_dir,
+                            progress_callback=progress_callback,
+                            task_label=f"Mengekstrak {split_file.stem}",
+                        )
             finally:
                 if temp_split_dir.exists():
                     shutil.rmtree(temp_split_dir, ignore_errors=True)

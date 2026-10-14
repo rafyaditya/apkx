@@ -110,13 +110,54 @@ apkx -l
 ```
 Mencetak seluruh daftar aplikasi terpasang langsung ke layar terminal dalam bentuk tabel ringkas tanpa membuka TUI.
 
-### 7. Menyertakan Aplikasi Bawaan Sistem (System Apps)
+### 7. Filter Aplikasi Bawaan Sistem (System Apps)
 ```powershell
-apkx -a
-# atau dikombinasikan dengan pencarian:
-apkx -a camera
+apkx -s
+# atau hanya aplikasi sistem tertentu:
+apkx -s settings
 ```
-Secara default, apkx hanya menampilkan aplikasi pihak ketiga. Gunakan opsi `-a` atau `--all` untuk menyertakan seluruh aplikasi bawaan sistem Android.
+Gunakan `-s` atau `--system` untuk memfilter hanya aplikasi bawaan sistem. Gunakan `-a` atau `--all` untuk menampilkan seluruh aplikasi (pihak ketiga + sistem).
+
+### 8. Memilih Tindakan Eksekusi Langsung (--apk-only, --extract-only, --both)
+```powershell
+# Hanya download installer APK tanpa ekstrak isi:
+apkx whatsapp -k
+
+# Hanya ekstrak isi file APK tanpa menyimpan file installer APK:
+apkx whatsapp -x
+
+# Simpan APK sekaligus ekstrak isinya secara eksplisit:
+apkx whatsapp -b
+```
+Opsi ini melewati dialog pemilihan tindakan sehingga proses berlangsung otomatis dan cepat.
+
+### 9. Audit & Informasi Teknis Aplikasi (--info / --analyze)
+```powershell
+apkx whatsapp --info
+# atau dengan output JSON:
+apkx whatsapp --info --json
+```
+Menampilkan audit teknis lengkap (versi aplikasi, versionCode, target/min SDK, izin/permissions, lokasi berkas APK di ponsel, format Single/Split APK) tanpa perlu mengunduh file APK.
+
+### 10. Mengurutkan Berdasarkan Aplikasi Terbaru (--recent)
+```powershell
+apkx -r
+# atau dikombinasikan dengan tabel daftar:
+apkx -l -r
+```
+Mengurutkan aplikasi berdasarkan waktu pemasangan atau pembaruan terakhir di perangkat Android.
+
+### 11. Mode Integrasi & Otomasi JSON (--json)
+```powershell
+# Daftar perangkat dalam format JSON:
+apkx --devices --json
+
+# Daftar aplikasi dalam format JSON:
+apkx --list --json
+
+# Ekstraksi dengan output status JSON untuk scripting:
+apkx whatsapp -k --json
+```
 
 ---
 
@@ -125,9 +166,17 @@ Secara default, apkx hanya menampilkan aplikasi pihak ketiga. Gunakan opsi `-a` 
 | Argumen / Opsi | Alias | Tipe | Keterangan |
 | :--- | :--- | :--- | :--- |
 | `[query]` | - | String | Nama aplikasi atau potongan Package ID (opsional). Jika dikosongkan, membuka mode interaktif TUI. |
-| `--devices` | - | Flag | Menampilkan tabel daftar perangkat Android yang terhubung ke komputer. |
+| `--devices` | - | Flag | Menampilkan daftar perangkat Android yang terhubung ke komputer. |
 | `--output` | `-o` | Path | Direktori utama penyimpanan hasil (default: `./output`). |
 | `--device` | `-d` | String | Serial ID perangkat spesifik jika ada lebih dari satu ponsel terhubung. |
 | `--list` | `-l` | Flag | Menampilkan daftar aplikasi di terminal tanpa melakukan ekstraksi. |
-| `--all` | `-a` | Flag | Menyertakan seluruh aplikasi sistem (default: hanya aplikasi pihak ketiga). |
+| `--all` | `-a` | Flag | Menyertakan seluruh aplikasi (pihak ketiga + sistem). |
+| `--system` | `-s` | Flag | Memfilter hanya aplikasi bawaan sistem Android. |
+| `--apk-only` | `-k` | Flag | Hanya simpan installer APK (.apk/.apks) tanpa mengekstrak isinya. |
+| `--extract-only` | `-x` | Flag | Hanya ekstrak isi APK (dex, res, assets) tanpa menyimpan file APK. |
+| `--both` | `-b` | Flag | Simpan file installer APK sekaligus ekstrak isinya (default). |
+| `--info`, `--analyze` | - | Flag | Tampilkan audit dan informasi teknis aplikasi tanpa ekstraksi. |
+| `--recent` | `-r` | Flag | Urutkan aplikasi berdasarkan waktu instalasi atau pembaruan terbaru. |
+| `--json` | - | Flag | Keluarkan output dalam format JSON untuk otomasi dan scripting. |
+| `--version` | `-v` | Flag | Tampilkan versi apkx dan keluar. |
 | `--help` | - | Flag | Menampilkan bantuan ringkas seluruh perintah dan opsi yang tersedia. |

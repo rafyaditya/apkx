@@ -206,13 +206,20 @@ class ADBManager:
             cmd.extend(["-s", device_id])
         return cmd
 
-    def list_packages(self, device_id: Optional[str] = None, third_party_only: bool = True) -> List[str]:
+    def list_packages(
+        self,
+        device_id: Optional[str] = None,
+        third_party_only: bool = True,
+        system_only: bool = False,
+    ) -> List[str]:
         """
         Lists installed package names on the target device.
         """
         cmd = self._build_base_cmd(device_id)
         cmd.extend(["shell", "pm", "list", "packages"])
-        if third_party_only:
+        if system_only:
+            cmd.append("-s")
+        elif third_party_only:
             cmd.append("-3")
 
         try:
@@ -235,6 +242,94 @@ class ADBManager:
                     packages.append(pkg)
 
         return sorted(packages)
+
+    def get_package_recent_order(self, device_id: Optional[str] = None) -> List[str]:
+        """
+        Mengambil urutan package berdasarkan waktu instalasi/update terbaru.
+        """
+        cmd = self._build_base_cmd(device_id)
+        cmd.extend(["shell", "ls -td /data/app/* /data/app/*/* 2>/dev/null"])
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+            if res.returncode == 0:
+                recent_pkgs = []
+                for line in res.stdout.splitlines():
+                    line = line.strip().rstrip("/")
+                    part = line.split("/")[-1]
+                    pkg_candidate = part.split("-")[0]
+                    if "." in pkg_candidate and pkg_candidate not in recent_pkgs and not pkg_candidate.startswith("~~"):
+                        recent_pkgs.append(pkg_candidate)
+                return recent_pkgs
+        except Exception:
+            pass
+        return []
+
+    def get_package_quick_info(self, package_name: str, device_id: Optional[str] = None) -> dict:
+        """
+        Mengambil informasi teknis cepat dari aplikasi di perangkat tanpa menarik file APK.
+        """
+        import re
+        info = {
+            "package_name": package_name,
+            "version_name": "-",
+            "version_code": "-",
+            "target_sdk": "-",
+            "min_sdk": "-",
+            "installed_time": "-",
+            "updated_time": "-",
+            "apk_paths": [],
+            "apk_format": "Single APK",
+            "permissions": [],
+        }
+
+        # 1. Ambil path APK
+        paths = self.get_package_apk_paths(package_name, device_id=device_id)
+        info["apk_paths"] = paths
+        if len(paths) > 1:
+            info["apk_format"] = f"Split APK ({len(paths)} part / .apks)"
+        elif len(paths) == 1:
+            info["apk_format"] = "Single APK (.apk)"
+
+        # 2. Query dumpsys package
+        cmd = self._build_base_cmd(device_id)
+        cmd.extend(["shell", f"dumpsys package {package_name}"])
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, check=False)
+            if res.returncode == 0:
+                perms = []
+                for line in res.stdout.splitlines():
+                    line_s = line.strip()
+                    if "versionName=" in line_s and info["version_name"] == "-":
+                        m = re.search(r"versionName=([^\s]+)", line_s)
+                        if m:
+                            info["version_name"] = m.group(1)
+                    if "versionCode=" in line_s and info["version_code"] == "-":
+                        m = re.search(r"versionCode=([0-9]+)", line_s)
+                        if m:
+                            info["version_code"] = m.group(1)
+                    if "targetSdk=" in line_s and info["target_sdk"] == "-":
+                        m = re.search(r"targetSdk=([0-9]+)", line_s)
+                        if m:
+                            info["target_sdk"] = m.group(1)
+                    if "minSdk=" in line_s and info["min_sdk"] == "-":
+                        m = re.search(r"minSdk=([0-9]+)", line_s)
+                        if m:
+                            info["min_sdk"] = m.group(1)
+                    if "firstInstallTime=" in line_s and info["installed_time"] == "-":
+                        info["installed_time"] = line_s.replace("firstInstallTime=", "").strip()
+                    if "lastUpdateTime=" in line_s and info["updated_time"] == "-":
+                        info["updated_time"] = line_s.replace("lastUpdateTime=", "").strip()
+                    if "permission." in line_s:
+                        m = re.search(r"([a-zA-Z0-9_\.]*permission\.[a-zA-Z0-9_]+)", line_s)
+                        if m:
+                            p = m.group(1).replace("android.permission.", "")
+                            if p not in perms:
+                                perms.append(p)
+                info["permissions"] = perms
+        except Exception:
+            pass
+
+        return info
 
     def get_package_apk_paths(self, package_name: str, device_id: Optional[str] = None) -> List[str]:
         """
