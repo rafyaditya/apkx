@@ -25,7 +25,6 @@ if sys.platform == "win32":
         pass
 
 import json
-import click
 import questionary
 import typer
 from rich.panel import Panel
@@ -104,7 +103,7 @@ class APKXTyper(typer.Typer):
                 raise SystemExit(2)
             elif type(e).__name__ in ["Exit", "Abort"]:
                 raise SystemExit(getattr(e, "exit_code", 0))
-            elif isinstance(e, click.ClickException):
+            elif any("ClickException" in base.__name__ for base in type(e).__mro__):
                 console.print(Panel(str(e), title="[bold red]Kesalahan Perintah[/]", border_style="red"))
                 raise SystemExit(getattr(e, "exit_code", 1))
             raise e
