@@ -22,18 +22,34 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
    * `output/extracted/<Nama_App>/` : Menyimpan seluruh berkas bongkaran (`classes.dex`, `AndroidManifest.xml`, `assets/`, `res/`, `lib/`).
 5. **Smart Framework Detection:**
    * Otomatis mendeteksi apakah aplikasi dibangun dengan **Flutter**, **React Native**, **Unity**, atau **Native Android**, dan menunjukkan lokasi file kode utamanya.
-6. **Modern TUI Dashboard:**
-   * Tabel 3 kolom (No, Nama Aplikasi, Package ID), kolom pencarian instan, dan kartu preview detail.
-7. **Zero-Config ADB (Auto-Download):**
-   * Tidak perlu memasang Android Studio yang besar! Jika ADB belum terpasang, `apkx` otomatis mengunduh Google Platform-Tools resmi (~12 MB) secara instan. Bekerja di Windows, macOS, dan Linux.
+6. **Pure-Python Manifest & Endpoint Extractor:**
+   * Mendekode binary `AndroidManifest.xml` menjadi teks XML terbaca tanpa AAPT/Java (`AndroidManifest_readable.xml`), serta memindai seluruh URL backend, domain, dan REST/GraphQL API ke `endpoints.json`.
+7. **Fast DEX Class Skeleton Parser (<50ms):**
+   * Membaca struktur paket dan kelas aplikasi tanpa pembengkakan token AI ke `class_skeleton.txt`.
+8. **Headless On-Demand JADX Decompiler:**
+   * Mengunduh JADX portable otomatis untuk dekompilasi source code Java/Kotlin, termasuk dekompilasi selektif untuk satu kelas tertentu (`--decompile-class`).
+9. **AI-Native MCP Server & Antigravity Skill:**
+   * Siap berkolaborasi langsung dengan AI Coding Agent (Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) via `apkx setup`.
+10. **Zero-Config ADB (Auto-Download):**
+    * Tidak perlu memasang Android Studio yang besar! Jika ADB belum terpasang, `apkx` otomatis mengunduh Google Platform-Tools resmi (~12 MB) secara instan. Bekerja di Windows, macOS, dan Linux.
 
 ---
 
 ## Prasyarat Sistem
 
-1. **Python**: Python versi 3.8 atau yang lebih baru (disarankan 3.10+, pastikan opsi "Add python.exe to PATH" aktif saat instalasi di Windows).
-2. **Git**: Git terpasang di sistem untuk mengambil repositori.
-3. **Koneksi Internet**: Diperlukan saat instalasi pertama kali untuk mengunduh package dan binary ADB resmi dari Google.
+1. **Python**:
+   * Python versi **3.8 atau yang lebih baru** (disarankan **3.10+**).
+   * Pada Windows, pastikan opsi *"Add python.exe to PATH"* dicentang saat instalasi Python.
+2. **Git**:
+   * Git terpasang di sistem untuk mengambil repositori dan menjalankan fitur `apkx update`.
+3. **Java Runtime Environment / JRE 11+** *(Opsional, direkomendasikan)*:
+   * **Dibutuhkan jika:** Anda ingin menggunakan fitur dekompilasi kode sumber Java/Kotlin menggunakan JADX (`--decompile`, `--decompile-class`, atau tool MCP `apkx_inspect_class`).
+   * **Tidak dibutuhkan jika:** Anda hanya melakukan ekstraksi APK, membaca manifest terdekode (AXML), memindai endpoint API, atau membaca class skeleton (semua fitur ini berjalan dengan *pure Python* tanpa Java).
+   * *Cara cek di terminal:* `java -version`.
+4. **ADB (Android Debug Bridge)** *(Otomatis / Zero-Config)*:
+   * Jika ADB sudah terpasang di sistem Anda, `apkx` akan otomatis menggunakannya. Jika belum ada, `apkx` akan otomatis mengunduh binary resmi dari Google tanpa konfigurasi manual.
+5. **Koneksi Internet**:
+   * Diperlukan saat instalasi pertama kali, pengunduhan binary ADB/JADX otomatis, serta saat menjalankan pembaruan `apkx update`.
 
 ---
 
@@ -159,7 +175,18 @@ apkx --list --json
 apkx whatsapp -k --json
 ```
 
-### 12. Integrasi Otomatis AI Coding Agent (MCP Server & Antigravity Skill)
+### 12. Dekompilasi Kode Sumber Java/Kotlin (--decompile & --decompile-class)
+`apkx` mengintegrasikan engine JADX Headless portable secara otomatis untuk merekonstruksi kode sumber Java dari file DEX:
+```powershell
+# Dekompilasi seluruh source code aplikasi:
+apkx whatsapp --decompile
+
+# Dekompilasi on-demand hanya untuk satu kelas spesifik (sangat cepat & hemat token AI):
+apkx whatsapp --decompile-class "com.whatsapp.authentication.FingerprintView"
+```
+*(Catatan: Memerlukan JRE/JDK 11+ terpasang pada komputer Anda).*
+
+### 13. Integrasi Otomatis AI Coding Agent (MCP Server & Antigravity Skill)
 Hubungkan `apkx` langsung ke AI Agent Anda (Google Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) cukup dengan satu perintah tanpa perlu mengedit file JSON konfigurasi secara manual:
 ```bash
 apkx setup
@@ -180,7 +207,7 @@ Server MCP `apkx` menyediakan 10 tools siap pakai:
 * `apkx_find_classes`: Cari kelas spesifik (misal: Auth, Repository, ViewModel) berdasarkan kata kunci.
 * `apkx_search_endpoints`: Filter endpoint dan domain API berdasarkan kata kunci (misal: login, api, v1, graphql).
 
-### 13. Pembaruan Otomatis (Self-Update)
+### 14. Pembaruan Otomatis (Self-Update)
 Periksa dan perbarui `apkx` ke versi terbaru langsung dari GitHub:
 ```bash
 # Periksa dan perbarui otomatis jika versi baru tersedia:
