@@ -277,6 +277,14 @@ def show_success_summary(
     if framework_info:
         table.add_row("Teknologi", f"[bold magenta]{framework_info.get('framework', '-')}[/bold magenta]")
         table.add_row("Lokasi Kode", f"[white]{framework_info.get('code_path', '-')}[/white]")
+        if framework_info.get("decoded_manifest"):
+            table.add_row("Manifest Terurai", f"[bold green]{framework_info.get('decoded_manifest')}[/bold green]")
+        if framework_info.get("total_classes"):
+            app_cls = framework_info.get("app_classes_count", 0)
+            tot_cls = framework_info.get("total_classes", 0)
+            table.add_row("Struktur Kelas", f"[bold yellow]{app_cls} kelas aplikasi ({tot_cls} total) di class_skeleton.txt[/bold yellow]")
+        if framework_info.get("total_urls"):
+            table.add_row("Endpoints Terdeteksi", f"[bold cyan]{framework_info.get('total_urls')} URLs di endpoints.json[/bold cyan]")
         table.add_row("Keterangan", f"[dim]{framework_info.get('description', '-')}[/dim]")
 
     console.print()

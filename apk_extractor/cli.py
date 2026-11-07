@@ -192,6 +192,33 @@ def main(
         "--json",
         help="Keluarkan output dalam format JSON (machine-readable)",
     ),
+    decompile: bool = typer.Option(
+        False,
+        "--decompile",
+        help="Dekomposisi penuh seluruh kode sumber Java menggunakan JADX (memerlukan Java)",
+    ),
+    decompile_class: Optional[str] = typer.Option(
+        None,
+        "--decompile-class",
+        help="Dekomposisi on-demand untuk satu kelas tertentu menggunakan JADX",
+    ),
+    serve_mcp: bool = typer.Option(
+        False,
+        "--mcp",
+        "--serve",
+        help="Jalankan apkx sebagai server Model Context Protocol (MCP) untuk AI Agent",
+    ),
+    update: bool = typer.Option(
+        False,
+        "--update",
+        "-u",
+        help="Periksa dan perbarui apkx ke versi terbaru dari GitHub",
+    ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Hanya periksa pembaruan tanpa mengunduh atau menginstal",
+    ),
     version: Optional[bool] = typer.Option(
         None,
         "--version",
@@ -221,6 +248,38 @@ def main(
         default_action = "extract_only"
     elif both:
         default_action = "both"
+
+    # Mode Server MCP (apkx serve / apkx --mcp)
+    if query in ("serve", "mcp") or serve_mcp:
+        try:
+            from apk_extractor.mcp_server import run_mcp_server
+            run_mcp_server()
+            raise typer.Exit(code=0)
+        except Exception as e:
+            show_error(f"Gagal menjalankan server MCP: {e}")
+            raise typer.Exit(code=1)
+
+    # Mode Auto-Setup MCP ke AI Coding Agents (apkx setup / apkx setup-mcp)
+    if query in ("setup", "setup-mcp", "mcp-setup"):
+        from apk_extractor.setup_mcp import install_mcp_to_all_clients
+        print_banner()
+        console.print("[bold cyan]Memindai dan menghubungkan ke AI Agent secara otomatis...[/bold cyan]\n")
+        results = install_mcp_to_all_clients()
+        for r in results:
+            if r["status"] == "success":
+                console.print(f"[bold green][V] {r['client']}:[/bold green] Terhubung di [cyan]{r['path']}[/cyan]")
+            else:
+                console.print(f"[bold red][X] {r['client']}:[/bold red] Gagal: {r.get('error')}")
+        console.print("\n[bold green][V] Selesai![/bold green] AI Agent Anda kini sudah terhubung ke apkx tanpa perlu edit JSON manual.\n")
+        raise typer.Exit(code=0)
+
+    # Mode Update Otomatis (apkx update / apkx update --check / apkx --update / apkx --check)
+    if query in ("update", "upgrade", "self-update") or update or (check and query is None):
+        from apk_extractor.updater import run_updater
+        if not as_json:
+            print_banner()
+        code = run_updater(check_only=check, as_json=as_json)
+        raise typer.Exit(code=code)
 
     adb = ADBManager()
     packager = APKPackager(adb)
@@ -357,6 +416,8 @@ def main(
             default_action=default_action,
             output_dir=cur_output_dir,
             is_multi=is_multi,
+            decompile=decompile,
+            decompile_class=decompile_class,
         )
 
         if is_multi and dev_idx < len(target_devices) and not as_json:
@@ -378,6 +439,8 @@ def process_single_device(
     default_action: Optional[str],
     output_dir: Path,
     is_multi: bool,
+    decompile: bool = False,
+    decompile_class: Optional[str] = None,
 ) -> None:
     """Processes package listing, selection, and extraction for a specific device."""
     # Gunakan console_err saat --json aktif agar spinner/progress tampil di stderr
@@ -639,6 +702,39 @@ def process_single_device(
                 fw_name = fw_info.get("framework", "Native Android")
                 console.print(f"[bold green][V][/bold green] Arsitektur terdeteksi: [bold magenta]{fw_name}[/bold magenta]")
 
+        # 8.5 Dekompilasi JADX jika diminta (--decompile atau --decompile-class)
+        decompiled_src_folder = None
+        decompiled_class_file = None
+        if (decompile or decompile_class) and extract_res.output_path and extract_res.output_path.exists():
+            target_src_dir = (app_extracted_folder or output_dir / app_folder_name) / "src"
+            if not packager.jadx.is_installed():
+                with active_console.status("[bold cyan]Menyiapkan engine JADX portable...[/bold cyan]"):
+                    packager.jadx.ensure_installed()
+
+            if decompile_class:
+                with active_console.status(f"[bold cyan]Mendekomposisi kelas {decompile_class} via JADX...[/bold cyan]"):
+                    cls_file_name = f"{decompile_class.split('.')[-1]}.java"
+                    out_java = target_src_dir / cls_file_name
+                    code = packager.jadx.decompile_class(extract_res.output_path, decompile_class, output_file=out_java)
+                    if code:
+                        decompiled_class_file = str(out_java)
+                        if not as_json:
+                            console.print(f"[bold green][V][/bold green] Kelas berhasil didekomposisi: [cyan]{out_java}[/cyan]")
+                    else:
+                        if not as_json:
+                            show_warning(f"Gagal mendekomposisi kelas '{decompile_class}' atau kelas tidak ditemukan.")
+
+            if decompile:
+                with active_console.status("[bold cyan]Mendekomposisi seluruh source code via JADX...[/bold cyan]"):
+                    success = packager.jadx.decompile_app(extract_res.output_path, target_src_dir)
+                    if success:
+                        decompiled_src_folder = str(target_src_dir)
+                        if not as_json:
+                            console.print(f"[bold green][V][/bold green] Source code Java berhasil didekomposisi ke [cyan]{target_src_dir}[/cyan]")
+                    else:
+                        if not as_json:
+                            show_warning("Gagal mendekomposisi source code lengkap dengan JADX (pastikan JRE 11+ terpasang).")
+
         # Jika aksi adalah extract_only, hapus file installer APK dari apks_dir agar bersih
         final_apk_path: Optional[Path] = extract_res.output_path
         if selected_action == "extract_only":
@@ -660,6 +756,8 @@ def process_single_device(
                 "output_apk": str(final_apk_path) if final_apk_path else None,
                 "extracted_folder": str(app_extracted_folder) if app_extracted_folder else None,
                 "framework_info": fw_info,
+                "decompiled_class": decompiled_class_file,
+                "decompiled_src": decompiled_src_folder,
             }
             print(json.dumps(res_json, indent=2, ensure_ascii=False))
         else:

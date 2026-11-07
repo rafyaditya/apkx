@@ -292,7 +292,7 @@ class ADBManager:
 
         # 2. Query dumpsys package
         cmd = self._build_base_cmd(device_id)
-        cmd.extend(["shell", f"dumpsys package {package_name}"])
+        cmd.extend(["shell", "dumpsys", "package", package_name])
         try:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, check=False)
             if res.returncode == 0:

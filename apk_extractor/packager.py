@@ -11,6 +11,10 @@ from typing import Callable, Dict, List, Optional
 
 from apk_extractor.adb import ADBManager
 from apk_extractor.app_names import extract_apk_label, save_to_app_cache
+from apk_extractor.axml import decode_axml
+from apk_extractor.dex import extract_class_skeleton_from_dir, format_skeleton_text
+from apk_extractor.endpoints import extract_endpoints_from_dir
+from apk_extractor.jadx import JADXManager
 
 WINDOWS_RESERVED_NAMES = {
     "CON", "PRN", "AUX", "NUL",
@@ -27,10 +31,9 @@ def sanitize_archive_member_path(member_path: str) -> Path:
     for part in Path(member_path).parts:
         if part in ("..", "/", "\\", ""):
             continue
-        if sys.platform == "win32":
-            p_stem = Path(part).stem.upper()
-            if p_stem in WINDOWS_RESERVED_NAMES:
-                part = f"_{part}"
+        p_stem = Path(part).stem.upper()
+        if p_stem in WINDOWS_RESERVED_NAMES:
+            part = f"_{part}"
         parts.append(part)
     return Path(*parts) if parts else Path()
 
@@ -117,8 +120,9 @@ class ExtractionResult:
 class APKPackager:
     """Handles pulling, packaging, unpacking, and analyzing APK files."""
 
-    def __init__(self, adb: ADBManager):
+    def __init__(self, adb: ADBManager, jadx: Optional[JADXManager] = None):
         self.adb = adb
+        self.jadx = jadx or JADXManager()
 
     def extract(
         self,
@@ -281,7 +285,32 @@ class APKPackager:
                 if temp_split_dir.exists():
                     shutil.rmtree(temp_split_dir, ignore_errors=True)
 
+        # Otomatis decode AndroidManifest.xml biner ke teks XML terbaca
+        self.decode_manifest_files(target_dir)
+
         return target_dir
+
+    def decode_manifest_files(self, target_dir: Path) -> Optional[Path]:
+        """
+        Mencari dan mendekode seluruh AndroidManifest.xml biner (AXML) di target_dir
+        menjadi berkas XML teks biasa (AndroidManifest_readable.xml).
+        """
+        candidates = list(target_dir.glob("**/AndroidManifest.xml"))
+        decoded_root_path = target_dir / "AndroidManifest_readable.xml"
+
+        for manifest_path in candidates:
+            try:
+                raw_bytes = manifest_path.read_bytes()
+                decoded_xml = decode_axml(raw_bytes)
+                if decoded_xml and "<manifest" in decoded_xml:
+                    readable_path = manifest_path.parent / "AndroidManifest_readable.xml"
+                    readable_path.write_text(decoded_xml, encoding="utf-8")
+                    if not decoded_root_path.exists() or "base" in manifest_path.parts:
+                        decoded_root_path.write_text(decoded_xml, encoding="utf-8")
+            except Exception:
+                pass
+
+        return decoded_root_path if decoded_root_path.exists() else None
 
     def detect_framework(self, extracted_dir: Path) -> Dict[str, str]:
         """
@@ -337,11 +366,34 @@ class APKPackager:
             "description": "Kode logika dikompilasi ke bytecode Dalvik/ART (.dex). Gunakan JADX untuk membaca kode Java.",
         }
 
-    def generate_analysis_summary(self, extracted_dir: Path, app_name: str, package_name: str) -> Dict[str, str]:
+    def generate_analysis_summary(self, extracted_dir: Path, app_name: str, package_name: str) -> Dict[str, Any]:
         """
-        Menghasilkan ringkasan analisis teknologi dan menulis file catatan di folder ekstraksi.
+        Menghasilkan ringkasan analisis teknologi, dekode manifest, ekstraksi endpoint,
+        dan menulis file catatan di folder ekstraksi.
         """
         fw_info = self.detect_framework(extracted_dir)
+
+        # 1. Pastikan Manifest terbaca
+        decoded_manifest = self.decode_manifest_files(extracted_dir)
+
+        # 2. Ekstrak Endpoints & URLs
+        endpoints_data = extract_endpoints_from_dir(extracted_dir)
+        endpoints_file = extracted_dir / "endpoints.json"
+        try:
+            endpoints_file.write_text(json.dumps(endpoints_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+        # 3. Ekstrak Struktur & Kerangka Kelas (DEX Class Skeleton)
+        skeleton_data = extract_class_skeleton_from_dir(extracted_dir, target_package=package_name)
+        skeleton_json_file = extracted_dir / "class_skeleton.json"
+        skeleton_txt_file = extracted_dir / "class_skeleton.txt"
+        try:
+            skeleton_json_file.write_text(json.dumps(skeleton_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            skeleton_txt = format_skeleton_text(skeleton_data, app_name, package_name)
+            skeleton_txt_file.write_text(skeleton_txt, encoding="utf-8")
+        except Exception:
+            pass
 
         summary_data = {
             "app_name": app_name,
@@ -350,6 +402,13 @@ class APKPackager:
             "primary_code_location": fw_info["code_path"],
             "description": fw_info["description"],
             "extracted_directory": str(extracted_dir.resolve()),
+            "decoded_manifest": str(decoded_manifest.name) if decoded_manifest else None,
+            "total_urls_found": endpoints_data.get("total_urls", 0),
+            "domains": endpoints_data.get("domains", []),
+            "sample_api_endpoints": endpoints_data.get("api_endpoints", [])[:10],
+            "total_classes": skeleton_data.get("total_classes", 0),
+            "app_classes_count": skeleton_data.get("app_classes_count", 0),
+            "class_skeleton": "class_skeleton.txt" if skeleton_txt_file.exists() else None,
         }
 
         # Tulis JSON
@@ -359,7 +418,20 @@ class APKPackager:
         except Exception:
             pass
 
-        # Tulis README
+        # Format README
+        domains_list = endpoints_data.get("domains", [])
+        domains_str = "\n".join(f"  • {d}" for d in domains_list[:10])
+        if len(domains_list) > 10:
+            domains_str += f"\n  • ... dan {len(domains_list) - 10} domain lainnya"
+
+        endpoints_sample = endpoints_data.get("api_endpoints", [])[:8]
+        if not endpoints_sample:
+            endpoints_sample = endpoints_data.get("all_endpoints", [])[:8]
+
+        endpoints_sample_str = "\n".join(f"  • {ep}" for ep in endpoints_sample)
+        if not endpoints_sample_str:
+            endpoints_sample_str = "  (Tidak ada URL API terdeteksi)"
+
         readme_file = extracted_dir / "README_ANALISIS.txt"
         readme_text = (
             f"====================================================\n"
@@ -368,15 +440,29 @@ class APKPackager:
             f"Nama Aplikasi       : {app_name}\n"
             f"Package ID          : {package_name}\n"
             f"Teknologi/Framework : {fw_info['framework']}\n"
-            f"Lokasi Kode Utama   : {fw_info['code_path']}\n\n"
+            f"Lokasi Kode Utama   : {fw_info['code_path']}\n"
+            f"Decoded Manifest    : {decoded_manifest.name if decoded_manifest else '-'}\n"
+            f"Total URL Ditemukan : {endpoints_data.get('total_urls', 0)}\n\n"
+            f"Domain Backend Terdeteksi:\n"
+            f"{domains_str or '  (Tidak ada domain terdeteksi)'}\n\n"
+            f"Contoh API Endpoints:\n"
+            f"{endpoints_sample_str}\n\n"
             f"Keterangan:\n"
             f"{fw_info['description']}\n\n"
-            f"Tips untuk Antigravity IDE:\n"
-            f"- Anda bisa membuka folder ini langsung untuk menelusuri isi aset dan kodenya.\n"
+            f"Tips untuk AI Agent & Antigravity IDE:\n"
+            f"- Buka file 'AndroidManifest_readable.xml' untuk melihat permission & activities lengkap.\n"
+            f"- Buka file 'class_skeleton.txt' untuk melihat seluruh struktur kelas & modul aplikasi.\n"
+            f"- Buka file 'endpoints.json' untuk melihat seluruh endpoint API aplikasi.\n"
         )
         try:
             readme_file.write_text(readme_text, encoding="utf-8")
         except Exception:
             pass
 
-        return fw_info
+        res = dict(fw_info)
+        res["total_urls"] = endpoints_data.get("total_urls", 0)
+        res["decoded_manifest"] = str(decoded_manifest.name) if decoded_manifest else None
+        res["total_classes"] = skeleton_data.get("total_classes", 0)
+        res["app_classes_count"] = skeleton_data.get("app_classes_count", 0)
+        res["class_skeleton"] = "class_skeleton.txt" if skeleton_txt_file.exists() else None
+        return res

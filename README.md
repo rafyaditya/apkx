@@ -31,7 +31,7 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
 
 ## Prasyarat Sistem
 
-1. **Python**: Python versi 3.10 atau yang lebih baru (pastikan opsi "Add python.exe to PATH" aktif saat instalasi di Windows).
+1. **Python**: Python versi 3.8 atau yang lebih baru (disarankan 3.10+, pastikan opsi "Add python.exe to PATH" aktif saat instalasi di Windows).
 2. **Git**: Git terpasang di sistem untuk mengambil repositori.
 3. **Koneksi Internet**: Diperlukan saat instalasi pertama kali untuk mengunduh package dan binary ADB resmi dari Google.
 
@@ -159,13 +159,44 @@ apkx --list --json
 apkx whatsapp -k --json
 ```
 
+### 12. Integrasi Otomatis AI Coding Agent (MCP Server & Antigravity Skill)
+Hubungkan `apkx` langsung ke AI Agent Anda (Google Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) cukup dengan satu perintah tanpa perlu mengedit file JSON konfigurasi secara manual:
+```bash
+apkx setup
+```
+Perintah ini otomatis:
+1. Memindai AI coding agent yang terpasang dan mendaftarkan server MCP `apkx serve`.
+2. Menyinkronkan **Skill Antigravity** (`apkx-android-blueprint`) ke `~/.gemini/config/skills/` agar AI Agent memahami SOP analisis APK secara metodis.
+
+Server MCP `apkx` menyediakan 10 tools siap pakai:
+* `apkx_list_devices`: Daftar perangkat Android yang terhubung.
+* `apkx_list_apps`: Daftar aplikasi terpasang (nama aplikasi ramah + package ID).
+* `apkx_get_app_info`: Audit teknis cepat (versi, SDK, permission) tanpa unduh APK.
+* `apkx_pull_and_extract`: Tarik APK/APKS dari ponsel dan ekstrak seluruh artefak blueprint.
+* `apkx_get_manifest`: Baca XML terbaca dari `AndroidManifest.xml`.
+* `apkx_get_endpoints`: Ambil seluruh URL dan domain backend dari binary aplikasi.
+* `apkx_get_class_skeleton`: Baca struktur paket dan kelas DEX tanpa token bloat.
+* `apkx_inspect_class`: Dekompilasi on-demand satu kelas spesifik via JADX.
+* `apkx_find_classes`: Cari kelas spesifik (misal: Auth, Repository, ViewModel) berdasarkan kata kunci.
+* `apkx_search_endpoints`: Filter endpoint dan domain API berdasarkan kata kunci (misal: login, api, v1, graphql).
+
+### 13. Pembaruan Otomatis (Self-Update)
+Periksa dan perbarui `apkx` ke versi terbaru langsung dari GitHub:
+```bash
+# Periksa dan perbarui otomatis jika versi baru tersedia:
+apkx update
+
+# Hanya periksa ketersediaan versi baru tanpa menginstal:
+apkx update --check
+```
+
 ---
 
 ## Ringkasan Argumen dan Opsi (CLI Reference)
 
 | Argumen / Opsi | Alias | Tipe | Keterangan |
 | :--- | :--- | :--- | :--- |
-| `[query]` | - | String | Nama aplikasi atau potongan Package ID (opsional). Jika dikosongkan, membuka mode interaktif TUI. |
+| `[query]` | - | String | Nama aplikasi, package ID, atau perintah cepat (`devices`, `serve`, `setup`, `update`). |
 | `--devices` | - | Flag | Menampilkan daftar perangkat Android yang terhubung ke komputer. |
 | `--output` | `-o` | Path | Direktori utama penyimpanan hasil (default: `./output`). |
 | `--device` | `-d` | String | Serial ID perangkat spesifik jika ada lebih dari satu ponsel terhubung. |
@@ -178,5 +209,10 @@ apkx whatsapp -k --json
 | `--info`, `--analyze` | - | Flag | Tampilkan audit dan informasi teknis aplikasi tanpa ekstraksi. |
 | `--recent` | `-r` | Flag | Urutkan aplikasi berdasarkan waktu instalasi atau pembaruan terbaru. |
 | `--json` | - | Flag | Keluarkan output dalam format JSON untuk otomasi dan scripting. |
+| `--decompile` | - | Flag | Dekomposisi penuh seluruh kode sumber Java menggunakan JADX. |
+| `--decompile-class` | - | String | Dekomposisi on-demand untuk satu kelas tertentu menggunakan JADX. |
+| `--serve`, `--mcp` | - | Flag | Jalankan server Model Context Protocol (MCP) untuk AI Agent. |
+| `--update` | `-u` | Flag | Periksa dan perbarui apkx ke versi terbaru dari GitHub. |
+| `--check` | - | Flag | Hanya periksa pembaruan tanpa mengunduh atau menginstal. |
 | `--version` | `-v` | Flag | Tampilkan versi apkx dan keluar. |
 | `--help` | - | Flag | Menampilkan bantuan ringkas seluruh perintah dan opsi yang tersedia. |

@@ -102,6 +102,24 @@ class TestAPKPackager(unittest.TestCase):
         fw = self.packager.detect_framework(unpack_dir)
         self.assertIn("React Native", fw["framework"])
 
+    def test_generate_analysis_summary_with_endpoints_and_manifest(self):
+        test_dir = self.temp_out_dir / "extracted_summary"
+        test_dir.mkdir(parents=True, exist_ok=True)
+
+        manifest_file = test_dir / "AndroidManifest.xml"
+        manifest_file.write_text('<manifest package="com.test.summary"><uses-permission android:name="android.permission.INTERNET"/></manifest>', encoding="utf-8")
+
+        dex_file = test_dir / "classes.dex"
+        dex_file.write_bytes(b"dummy code with https://api.service.com/v1/data inside")
+
+        summary = self.packager.generate_analysis_summary(test_dir, "SummaryApp", "com.test.summary")
+
+        self.assertTrue((test_dir / "endpoints.json").exists())
+        self.assertTrue((test_dir / "analysis_info.json").exists())
+        self.assertTrue((test_dir / "README_ANALISIS.txt").exists())
+        self.assertTrue((test_dir / "AndroidManifest_readable.xml").exists())
+        self.assertGreaterEqual(summary.get("total_urls", 0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
