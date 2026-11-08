@@ -204,6 +204,80 @@ class TestSafeExtract(unittest.TestCase):
             self.assertTrue((tmp_path / "normal.txt").exists())
 
 
+class TestCLISubcommands(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "DEV1"}))
+    @patch("apk_extractor.adb.ADBManager.take_screenshot", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.get_screen_size", return_value=(1080, 2400))
+    def test_cli_screenshot(self, mock_size, mock_shot, mock_ready, mock_inst):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            result = self.runner.invoke(app, ["screenshot", "-o", tmp.name, "--json"])
+            self.assertEqual(result.exit_code, 0)
+            data = json.loads(result.output)
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["screen_width"], 1080)
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    def test_cli_install_missing_target(self, mock_inst):
+        result = self.runner.invoke(app, ["install"])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("memerlukan path berkas", result.output)
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "DEV1"}))
+    @patch("apk_extractor.adb.ADBManager.install_apk")
+    def test_cli_install_success(self, mock_install, mock_ready, mock_inst):
+        mock_install.return_value = (True, "SUCCESS", {"status": "success", "message": "Berhasil dipasang"})
+        result = self.runner.invoke(app, ["install", "app.apk", "--json"])
+        self.assertEqual(result.exit_code, 0)
+        data = json.loads(result.output)
+        self.assertEqual(data["status"], "success")
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "DEV1"}))
+    @patch("apk_extractor.adb.ADBManager.uninstall_app")
+    def test_cli_uninstall_success(self, mock_uninstall, mock_ready, mock_inst):
+        mock_uninstall.return_value = (True, "SUCCESS", {"status": "success", "message": "Berhasil dihapus"})
+        result = self.runner.invoke(app, ["uninstall", "com.example.app", "--json"])
+        self.assertEqual(result.exit_code, 0)
+        data = json.loads(result.output)
+        self.assertEqual(data["status"], "success")
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "DEV1"}))
+    @patch("apk_extractor.adb.ADBManager.dump_ui_hierarchy", return_value=[{"text": "Simpan", "center": [100, 200]}])
+    @patch("apk_extractor.adb.ADBManager.get_screen_size", return_value=(720, 1600))
+    def test_cli_dump_ui(self, mock_size, mock_dump, mock_ready, mock_inst):
+        result = self.runner.invoke(app, ["dump-ui", "--json"])
+        self.assertEqual(result.exit_code, 0)
+        data = json.loads(result.output)
+        self.assertEqual(data["total_elements"], 1)
+        self.assertEqual(data["elements"][0]["text"], "Simpan")
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "DEV1"}))
+    @patch("apk_extractor.adb.ADBManager.get_app_logs", return_value={"package_name": "com.test", "pid": 123, "logs": "FATAL", "has_crash_indicator": True, "total_lines": 1})
+    def test_cli_logs(self, mock_logs, mock_ready, mock_inst):
+        result = self.runner.invoke(app, ["logs", "com.test", "--json"])
+        self.assertEqual(result.exit_code, 0)
+        data = json.loads(result.output)
+        self.assertEqual(data["package_name"], "com.test")
+        self.assertTrue(data["has_crash_indicator"])
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "DEV1"}))
+    @patch("apk_extractor.adb.ADBManager.ensure_device_awake", return_value={"status": "ready", "screen_on": True, "locked": False, "message": "Layar aktif"})
+    def test_cli_wake(self, mock_wake, mock_ready, mock_inst):
+        result = self.runner.invoke(app, ["wake", "--json"])
+        self.assertEqual(result.exit_code, 0)
+        data = json.loads(result.output)
+        self.assertEqual(data["status"], "ready")
+
+
 if __name__ == "__main__":
     unittest.main()
 

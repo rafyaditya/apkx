@@ -114,30 +114,78 @@ def extract_sqlite_schema_from_dir(target_dir: Path) -> Dict[str, Any]:
     found_statements = set()
     tables: Dict[str, List[str]] = {}
 
-    create_table_regex = re.compile(
-        rb"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?\s*\(([\s\S]*?)\)",
+    header_regex = re.compile(
+        rb"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([`\"'\[]?([a-zA-Z0-9_]+)[`\"'\]]?)\s*\(",
         re.IGNORECASE,
     )
+
+    def _split_columns(body_text: str) -> List[str]:
+        cols = []
+        current_col = []
+        paren_depth = 0
+        for char in body_text:
+            if char == "(":
+                paren_depth += 1
+                current_col.append(char)
+            elif char == ")":
+                if paren_depth > 0:
+                    paren_depth -= 1
+                current_col.append(char)
+            elif char == "," and paren_depth == 0:
+                col_str = "".join(current_col).strip()
+                if col_str:
+                    cols.append(" ".join(col_str.split()))
+                current_col = []
+            else:
+                current_col.append(char)
+        last_col = "".join(current_col).strip()
+        if last_col:
+            cols.append(" ".join(last_col.split()))
+        return cols
 
     for f in scan_files:
         try:
             data = f.read_bytes()
-            matches = create_table_regex.findall(data)
-            for tbl_bytes, body_bytes in matches:
+            for match in header_regex.finditer(data):
                 try:
-                    tbl_name = tbl_bytes.decode("utf-8", errors="ignore").strip("`'\" ")
-                    body_text = body_bytes.decode("utf-8", errors="ignore").strip()
+                    tbl_raw = match.group(2) or match.group(1)
+                    tbl_name = tbl_raw.decode("utf-8", errors="ignore").strip("`'\"[] ")
 
-                    if 1 < len(tbl_name) < 60 and len(body_text) < 2500:
-                        cols = []
-                        for col in body_text.split(","):
-                            clean_col = " ".join(col.split()).strip()
-                            if clean_col and len(clean_col) < 150:
-                                cols.append(clean_col)
+                    if not (1 < len(tbl_name) < 60):
+                        continue
 
-                        if cols and tbl_name.lower() not in ("room_master_table", "android_metadata"):
-                            tables[tbl_name] = cols
-                            found_statements.add(f"CREATE TABLE `{tbl_name}` (\n  " + ",\n  ".join(cols) + "\n);")
+                    start_pos = match.end()
+                    depth = 1
+                    end_pos = -1
+                    max_scan = min(len(data), start_pos + 4000)
+
+                    for i in range(start_pos, max_scan):
+                        b = data[i : i + 1]
+                        if b == b"(":
+                            depth += 1
+                        elif b == b")":
+                            depth -= 1
+                            if depth == 0:
+                                end_pos = i
+                                break
+                        elif b == b"\x00" and depth > 0:
+                            # End of string or binary segment
+                            break
+
+                    if end_pos != -1:
+                        body_bytes = data[start_pos:end_pos]
+                        body_text = body_bytes.decode("utf-8", errors="ignore").strip()
+
+                        if 2 < len(body_text) < 3500:
+                            cols = []
+                            for col in _split_columns(body_text):
+                                clean_col = " ".join(col.split()).strip()
+                                if clean_col and len(clean_col) < 200:
+                                    cols.append(clean_col)
+
+                            if cols and tbl_name.lower() not in ("room_master_table", "android_metadata"):
+                                tables[tbl_name] = cols
+                                found_statements.add(f"CREATE TABLE `{tbl_name}` (\n  " + ",\n  ".join(cols) + "\n);")
                 except Exception:
                     pass
         except Exception:

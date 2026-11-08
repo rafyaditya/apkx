@@ -375,6 +375,34 @@ class TestADBManager(unittest.TestCase):
             self.assertEqual(code, "SUCCESS")
 
     @patch("subprocess.run")
+    def test_install_apks_split_success(self, mock_run):
+        import tempfile
+        import zipfile
+        from pathlib import Path
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "Success\n"
+        mock_proc.stderr = ""
+        mock_run.return_value = mock_proc
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            apks_file = Path(tmp_dir) / "test_app.apks"
+            with zipfile.ZipFile(apks_file, "w") as zf:
+                zf.writestr("base.apk", b"PKdummybase")
+                zf.writestr("split_config.arm64_v8a.apk", b"PKdummysplit")
+
+            manager = ADBManager(adb_path="mock_adb")
+            ok, code, detail = manager.install_apk(apks_file)
+            self.assertTrue(ok)
+            self.assertEqual(code, "SUCCESS")
+            self.assertTrue(detail.get("is_split"))
+            self.assertEqual(detail.get("total_parts"), 2)
+
+            called_cmd = mock_run.call_args[0][0]
+            self.assertIn("install-multiple", called_cmd)
+
+    @patch("subprocess.run")
     def test_install_apk_update_incompatible(self, mock_run):
         import tempfile
         mock_proc = MagicMock()

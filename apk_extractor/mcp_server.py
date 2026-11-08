@@ -205,11 +205,27 @@ def create_mcp_server() -> Any:
             # If APK file or xml file
             if p.suffix.lower() == ".xml":
                 return decode_axml(p.read_bytes())
+            import io
             import zipfile
             with zipfile.ZipFile(p, "r") as zf:
                 if "AndroidManifest.xml" in zf.namelist():
                     data = zf.read("AndroidManifest.xml")
                     return decode_axml(data)
+                # Check for .apks bundle with base.apk or nested APKs
+                for apk_cand in ["base.apk", "base-master.apk"]:
+                    if apk_cand in zf.namelist():
+                        sub_bytes = zf.read(apk_cand)
+                        with zipfile.ZipFile(io.BytesIO(sub_bytes), "r") as sub_zf:
+                            if "AndroidManifest.xml" in sub_zf.namelist():
+                                data = sub_zf.read("AndroidManifest.xml")
+                                return decode_axml(data)
+                for name in zf.namelist():
+                    if name.endswith(".apk"):
+                        sub_bytes = zf.read(name)
+                        with zipfile.ZipFile(io.BytesIO(sub_bytes), "r") as sub_zf:
+                            if "AndroidManifest.xml" in sub_zf.namelist():
+                                data = sub_zf.read("AndroidManifest.xml")
+                                return decode_axml(data)
 
         return "Manifest tidak ditemukan atau tidak dapat didekode."
 

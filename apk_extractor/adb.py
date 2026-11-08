@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -928,7 +929,17 @@ class ADBManager:
         cmd.extend(["logcat", "-d"])
         if pid:
             cmd.extend(["--pid", str(pid)])
-        cmd.extend(["-s", "flutter:V", "AndroidRuntime:E", "CRASH:E", "DEBUG:E"])
+        cmd.extend([
+            "-s",
+            "flutter:V",
+            "ReactNative:V",
+            "ReactNativeJS:V",
+            "AndroidRuntime:E",
+            "CRASH:E",
+            "DEBUG:E",
+            "System.err:W",
+            "*:E",
+        ])
 
         try:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8, check=False)
@@ -998,8 +1009,9 @@ class ADBManager:
         device_id: Optional[str] = None,
     ) -> Tuple[bool, str, Dict[str, Any]]:
         """
-        Installs an APK file to the target Android device via ADB.
+        Installs an APK or Split-APK (.apks) file to the target Android device via ADB.
         Supports reinstall (-r), permission grant (-g), and downgrade (-d).
+        Automatically uses 'adb install-multiple' when installing .apks bundles.
         Returns (success, code, details).
         """
         p = Path(apk_path).resolve()
@@ -1027,15 +1039,69 @@ class ADBManager:
                 },
             )
 
+        is_split = p.suffix.lower() == ".apks"
+        temp_dir_obj: Optional[tempfile.TemporaryDirectory] = None
+        apk_files: List[str] = []
+
+        if is_split:
+            temp_dir_obj = tempfile.TemporaryDirectory()
+            temp_dir = Path(temp_dir_obj.name)
+            try:
+                with zipfile.ZipFile(p, "r") as zf:
+                    zf.extractall(temp_dir)
+                extracted_apks = list(temp_dir.glob("*.apk"))
+                if not extracted_apks:
+                    temp_dir_obj.cleanup()
+                    return (
+                        False,
+                        "INVALID_APKS_ARCHIVE",
+                        {
+                            "status": "error",
+                            "code": "INVALID_APKS_ARCHIVE",
+                            "message": f"Berkas .apks '{p.name}' tidak memuat berkas .apk di dalamnya.",
+                            "apk_path": str(p),
+                        },
+                    )
+
+                def apk_sort_key(f: Path) -> int:
+                    name = f.name.lower()
+                    if name == "base.apk":
+                        return 0
+                    if name.startswith("base"):
+                        return 1
+                    return 2
+
+                extracted_apks.sort(key=apk_sort_key)
+                apk_files = [str(f) for f in extracted_apks]
+            except Exception as e:
+                if temp_dir_obj:
+                    temp_dir_obj.cleanup()
+                return (
+                    False,
+                    "CORRUPTED_ARCHIVE",
+                    {
+                        "status": "error",
+                        "code": "CORRUPTED_ARCHIVE",
+                        "message": f"Gagal mengekstrak berkas .apks: {str(e)}",
+                        "apk_path": str(p),
+                    },
+                )
+        else:
+            apk_files = [str(p)]
+
         cmd = self._build_base_cmd(device_id)
-        cmd.append("install")
+        if is_split:
+            cmd.append("install-multiple")
+        else:
+            cmd.append("install")
+
         if reinstall:
             cmd.append("-r")
         if allow_downgrade:
             cmd.append("-d")
         if grant_permissions:
             cmd.append("-g")
-        cmd.append(str(p))
+        cmd.extend(apk_files)
 
         try:
             res = subprocess.run(
@@ -1056,8 +1122,10 @@ class ADBManager:
                         "status": "success",
                         "code": "SUCCESS",
                         "apk_path": str(p),
+                        "is_split": is_split,
+                        "total_parts": len(apk_files),
                         "file_size_mb": round(p.stat().st_size / (1024 * 1024), 2),
-                        "message": f"Aplikasi dari '{p.name}' berhasil dipasang ke perangkat.",
+                        "message": f"Aplikasi dari '{p.name}' berhasil dipasang ke perangkat{' (Split-APKs)' if is_split else ''}.",
                     },
                 )
 
@@ -1132,6 +1200,12 @@ class ADBManager:
                     "message": f"Terjadi kesalahan saat mengeksekusi adb install: {str(e)}",
                 },
             )
+        finally:
+            if temp_dir_obj:
+                try:
+                    temp_dir_obj.cleanup()
+                except Exception:
+                    pass
 
     def uninstall_app(
         self,

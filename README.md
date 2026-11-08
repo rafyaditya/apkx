@@ -192,7 +192,31 @@ apkx whatsapp --decompile-class "com.whatsapp.authentication.FingerprintView"
 ```
 *(Catatan: Memerlukan JRE/JDK 11+ terpasang pada komputer Anda).*
 
-### 13. Integrasi Otomatis AI Coding Agent (MCP Server & Antigravity Skill)
+### 13. Perintah Kontrol Perangkat & Testing dari Terminal (CLI Parity)
+Pengguna manusia dapat menjalankan seluruh perintah interaksi perangkat langsung dari terminal tanpa mengetik sintaks ADB mentah:
+```powershell
+# Ambil screenshot HP berkecepatan tinggi:
+apkx screenshot -o output/screen.png
+
+# Pasang aplikasi (.apk biasa maupun .apks Split-APK via adb install-multiple otomatis):
+apkx install build/app/outputs/flutter-apk/app-debug.apk
+apkx install output/apks/WhatsApp.apks
+
+# Hapus instalasi aplikasi dari perangkat:
+apkx uninstall com.example.app
+
+# Dapatkan hierarki UI dan koordinat sentuh tombol layar aktif:
+apkx dump-ui
+apkx dump-ui --json
+
+# Lihat logcat error, exception, dan crash tertarget:
+apkx logs com.example.app --tail 100
+
+# Bangunkan layar dan buka kunci ponsel:
+apkx wake --pin 1234
+```
+
+### 14. Integrasi Otomatis AI Coding Agent (MCP Server & Antigravity Skill)
 Hubungkan `apkx` langsung ke AI Agent Anda (Google Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) cukup dengan satu perintah tanpa perlu mengedit file JSON konfigurasi secara manual:
 ```bash
 apkx setup
@@ -206,14 +230,14 @@ Server MCP `apkx` menyediakan 23 tools siap pakai:
 * `apkx_list_apps`: Daftar aplikasi terpasang (nama aplikasi ramah + package ID).
 * `apkx_get_app_info`: Audit teknis cepat (versi, SDK, permission) tanpa unduh APK.
 * `apkx_pull_and_extract`: Tarik APK/APKS dari ponsel dan ekstrak seluruh artefak blueprint.
-* `apkx_get_manifest`: Baca XML terbaca dari `AndroidManifest.xml`.
+* `apkx_get_manifest`: Baca XML terbaca dari `AndroidManifest.xml` (termasuk dari dalam arsip `.apks`).
 * `apkx_get_endpoints`: Ambil seluruh URL dan domain backend dari binary aplikasi.
 * `apkx_get_class_skeleton`: Baca struktur paket dan kelas DEX tanpa token bloat.
 * `apkx_inspect_class`: Dekompilasi on-demand satu kelas spesifik via JADX.
 * `apkx_find_classes`: Cari kelas spesifik (misal: Auth, Repository, ViewModel) berdasarkan kata kunci.
 * `apkx_search_endpoints`: Filter endpoint dan domain API berdasarkan kata kunci (misal: login, api, v1, graphql).
-* `apkx_extract_sqlite_schema`: Ekstrak skema tabel SQLite dari biner `libapp.so` atau DEX secara otomatis.
-* `apkx_install_apk`: Pasang file APK ke perangkat fisik (auto flag -r, -g, -d & diagnosa error).
+* `apkx_extract_sqlite_schema`: Ekstrak skema tabel SQLite dari biner `libapp.so` atau DEX secara otomatis (bebas truncation tipe kolom bersarang).
+* `apkx_install_apk`: Pasang file APK atau .apks ke perangkat fisik (auto install-multiple, auto flag -r, -g, -d & diagnosa error).
 * `apkx_uninstall_app`: Hapus instalasi aplikasi dari perangkat untuk reinstall bersih atau ganti signature.
 * `apkx_launch_app`: Buka aplikasi target atau aplikasi kloningan di HP Android (`am start -S`).
 * `apkx_take_screenshot`: Ambil tangkapan layar perangkat berkecepatan tinggi via `adb exec-out`.
@@ -221,12 +245,12 @@ Server MCP `apkx` menyediakan 23 tools siap pakai:
 * `apkx_interact`: Jalankan aksi tap koordinat, tombol kembali (back), home, swipe, atau pengetikan teks.
 * `apkx_ensure_device_awake`: Bangunkan layar, auto-unlock PIN/swipe, dan aktifkan pencegah layar tidur USB.
 * `apkx_get_current_screen`: Deteksi nama Activity & proses PID yang sedang aktif di puncak layar.
-* `apkx_get_app_logs`: Perekam log error & crash tertarget khusus aplikasi target (Flutter/Android).
+* `apkx_get_app_logs`: Perekam log error & crash tertarget khusus aplikasi target (Flutter/React Native/Android).
 * `apkx_reset_app_data`: Reset total data aplikasi (`pm clear`) untuk pengujian ulang fresh-install state.
 * `apkx_open_deep_link`: Buka rute halaman spesifik via URL/Deep Link Intent secara langsung.
 * `apkx_toggle_night_mode`: Beralih antara Dark Mode dan Light Mode untuk verifikasi visual multi-tema.
 
-### 14. Pembaruan Otomatis (Self-Update)
+### 15. Pembaruan Otomatis (Self-Update)
 Periksa dan perbarui `apkx` ke versi terbaru langsung dari GitHub:
 ```bash
 # Periksa dan perbarui otomatis jika versi baru tersedia:
@@ -242,10 +266,13 @@ apkx update --check
 
 | Argumen / Opsi | Alias | Tipe | Keterangan |
 | :--- | :--- | :--- | :--- |
-| `[query]` | - | String | Nama aplikasi, package ID, atau perintah cepat (`devices`, `serve`, `setup`, `update`). |
+| `[query]` | - | String | Nama aplikasi, package ID, atau sub-perintah (`devices`, `screenshot`, `install`, `uninstall`, `logs`, `dump-ui`, `wake`, `serve`, `setup`, `update`). |
+| `[target]` | - | String | Target berkas APK/APKS atau nama package untuk perintah `install`, `uninstall`, dan `logs`. |
 | `--devices` | - | Flag | Menampilkan daftar perangkat Android yang terhubung ke komputer. |
 | `--output` | `-o` | Path | Direktori utama penyimpanan hasil (default: `./output`). |
 | `--device` | `-d` | String | Serial ID perangkat spesifik jika ada lebih dari satu ponsel terhubung. |
+| `--tail` | `-t` | Int | Jumlah baris logcat terakhir untuk perintah `apkx logs` (default: 80). |
+| `--pin` | - | String | PIN perangkat untuk membuka layar pada perintah `apkx wake`. |
 | `--list` | `-l` | Flag | Menampilkan daftar aplikasi di terminal tanpa melakukan ekstraksi. |
 | `--all` | `-a` | Flag | Menyertakan seluruh aplikasi (pihak ketiga + sistem). |
 | `--system` | `-s` | Flag | Memfilter hanya aplikasi bawaan sistem Android. |

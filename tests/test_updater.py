@@ -9,6 +9,7 @@ from pathlib import Path
 
 from apk_extractor import updater
 from apk_extractor.updater import (
+    CURRENT_VERSION,
     parse_semver,
     is_newer_version,
     fetch_latest_version,
@@ -130,34 +131,35 @@ class TestUpdater(unittest.TestCase):
         self.assertTrue(success)
         self.assertIn("pip", msg)
 
+    @patch("apk_extractor.updater.console.print")
     @patch("apk_extractor.updater.fetch_latest_version")
-    def test_run_updater_offline(self, mock_fetch):
+    def test_run_updater_offline(self, mock_fetch, mock_print):
         mock_fetch.return_value = None
         code = run_updater(check_only=False, as_json=False)
         self.assertEqual(code, 1)
 
+    @patch("apk_extractor.updater.console.print")
     @patch("apk_extractor.updater.fetch_latest_version")
-    def test_run_updater_up_to_date(self, mock_fetch):
-        mock_fetch.return_value = "1.0.1"
-        with patch("apk_extractor.updater.CURRENT_VERSION", "1.0.1"):
-            code = run_updater(check_only=False, as_json=False)
-            self.assertEqual(code, 0)
+    def test_run_updater_up_to_date(self, mock_fetch, mock_print):
+        mock_fetch.return_value = CURRENT_VERSION
+        code = run_updater(check_only=False, as_json=False)
+        self.assertEqual(code, 0)
 
+    @patch("apk_extractor.updater.console.print")
     @patch("apk_extractor.updater.fetch_latest_version")
-    def test_run_updater_check_only(self, mock_fetch):
-        mock_fetch.return_value = "2.0.0"
-        with patch("apk_extractor.updater.CURRENT_VERSION", "1.0.1"):
-            code = run_updater(check_only=True, as_json=False)
-            self.assertEqual(code, 0)
+    def test_run_updater_check_only(self, mock_fetch, mock_print):
+        mock_fetch.return_value = "99.0.0"
+        code = run_updater(check_only=True, as_json=False)
+        self.assertEqual(code, 0)
 
+    @patch("apk_extractor.updater.console.print")
     @patch("apk_extractor.updater.execute_update")
     @patch("apk_extractor.updater.fetch_latest_version")
-    def test_run_updater_upgrade_success(self, mock_fetch, mock_exec):
-        mock_fetch.return_value = "2.0.0"
+    def test_run_updater_upgrade_success(self, mock_fetch, mock_exec, mock_print):
+        mock_fetch.return_value = "99.0.0"
         mock_exec.return_value = (True, "Updated successfully")
-        with patch("apk_extractor.updater.CURRENT_VERSION", "1.0.1"):
-            code = run_updater(check_only=False, as_json=False)
-            self.assertEqual(code, 0)
+        code = run_updater(check_only=False, as_json=False)
+        self.assertEqual(code, 0)
 
     @patch("apk_extractor.updater.fetch_latest_version")
     def test_run_updater_json_output(self, mock_fetch):

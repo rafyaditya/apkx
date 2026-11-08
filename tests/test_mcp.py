@@ -58,6 +58,26 @@ class TestMCPServer(unittest.TestCase):
 
             asyncio.run(run_call())
 
+    @patch("apk_extractor.mcp_server.decode_axml", return_value="<manifest package='com.split.app'></manifest>")
+    def test_get_manifest_from_apks(self, mock_decode):
+        import io
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp_d:
+            apks_file = Path(tmp_d) / "test.apks"
+            base_buffer = io.BytesIO()
+            with zipfile.ZipFile(base_buffer, "w") as base_zf:
+                base_zf.writestr("AndroidManifest.xml", b"raw_manifest_bytes")
+
+            with zipfile.ZipFile(apks_file, "w") as apks_zf:
+                apks_zf.writestr("base.apk", base_buffer.getvalue())
+                apks_zf.writestr("split.apk", b"split_bytes")
+
+            async def run_call():
+                res = await self.server.call_tool("apkx_get_manifest", {"target_path": str(apks_file)})
+                self.assertIn("com.split.app", str(res))
+
+            asyncio.run(run_call())
+
     def test_get_endpoints(self):
         with tempfile.TemporaryDirectory() as tmp_d:
             p = Path(tmp_d)

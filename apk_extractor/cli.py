@@ -120,7 +120,11 @@ app = APKXTyper(
 def main(
     query: Optional[str] = typer.Argument(
         None,
-        help="Nama atau potongan nama package aplikasi (opsional, jika kosong akan membuka pencarian interaktif)",
+        help="Nama aplikasi/package atau sub-perintah (devices, screenshot, install, uninstall, logs, dump-ui, wake, serve, setup, update)",
+    ),
+    target: Optional[str] = typer.Argument(
+        None,
+        help="Target file APK/APKS atau nama package untuk sub-perintah install/uninstall/logs",
     ),
     all_apps: bool = typer.Option(
         False,
@@ -218,6 +222,17 @@ def main(
         False,
         "--check",
         help="Hanya periksa pembaruan tanpa mengunduh atau menginstal",
+    ),
+    tail: int = typer.Option(
+        80,
+        "--tail",
+        "-t",
+        help="Jumlah baris logcat terakhir untuk perintah logs",
+    ),
+    pin: Optional[str] = typer.Option(
+        None,
+        "--pin",
+        help="PIN perangkat untuk membuka layar pada perintah wake",
     ),
     version: Optional[bool] = typer.Option(
         None,
@@ -328,6 +343,194 @@ def main(
 
         show_devices_table(device_list)
         raise typer.Exit(code=0)
+
+    # 1.6 Sub-perintah Screenshot (apkx screenshot [-o screen.png] [-d id])
+    if query in ("screenshot", "screencap", "capture"):
+        out_target = output_dir
+        if out_target.is_dir() or str(out_target) in (".", "./output"):
+            out_target = out_target / "screen.png"
+        out_target.parent.mkdir(parents=True, exist_ok=True)
+
+        ready, code, detail = adb.check_device_ready(device_id)
+        if not ready:
+            if as_json:
+                print(json.dumps(detail))
+            else:
+                print_banner()
+                show_error(detail.get("message", "Perangkat tidak siap."))
+            raise typer.Exit(code=1)
+
+        ok = adb.take_screenshot(out_target, device_id=device_id)
+        width, height = adb.get_screen_size(device_id=device_id)
+        if ok and out_target.is_file():
+            if as_json:
+                print(json.dumps({
+                    "status": "success",
+                    "path": str(out_target.resolve()),
+                    "size_bytes": out_target.stat().st_size,
+                    "screen_width": width,
+                    "screen_height": height,
+                }))
+            else:
+                print_banner()
+                console.print(f"[bold green][V] Screenshot berhasil disimpan![/] [cyan]{out_target.resolve()}[/] ({width}x{height} px, {round(out_target.stat().st_size/1024, 1)} KB)")
+            raise typer.Exit(code=0)
+        else:
+            if as_json:
+                print(json.dumps({"status": "error", "message": "Gagal mengambil screenshot dari perangkat."}))
+            else:
+                print_banner()
+                show_error("Gagal mengambil screenshot dari perangkat.")
+            raise typer.Exit(code=1)
+
+    # 1.7 Sub-perintah Install (apkx install <berkas.apk/apks> [-d id])
+    if query == "install":
+        if not target:
+            show_error("Perintah 'apkx install' memerlukan path berkas APK atau .apks.\nContoh: apkx install app.apk atau apkx install app.apks")
+            raise typer.Exit(code=2)
+        apk_p = Path(target)
+        ready, code, detail = adb.check_device_ready(device_id)
+        if not ready:
+            if as_json:
+                print(json.dumps(detail))
+            else:
+                print_banner()
+                show_error(detail.get("message", "Perangkat tidak siap."))
+            raise typer.Exit(code=1)
+
+        if not as_json:
+            print_banner()
+            console.print(f"[cyan]Mentransfer dan memasang berkas:[/] [bold green]{apk_p.name}[/]")
+
+        with Status("[cyan]Sedang memasang APK ke HP...", console=console) if not as_json else nullcontext():
+            ok, res_code, res_detail = adb.install_apk(apk_p, reinstall=True, grant_permissions=True, allow_downgrade=True, device_id=device_id)
+
+        if as_json:
+            print(json.dumps(res_detail))
+        else:
+            if ok:
+                parts_str = f" ({res_detail.get('total_parts')} split parts)" if res_detail.get("is_split") else ""
+                console.print(f"[bold green][V] {res_detail.get('message', 'Aplikasi berhasil dipasang!')}[/]{parts_str}")
+            else:
+                show_error(f"{res_detail.get('message', 'Gagal memasang aplikasi.')}\nSaran: {res_detail.get('suggestion', 'Periksa koneksi perangkat.')}")
+        raise typer.Exit(code=0 if ok else 1)
+
+    # 1.8 Sub-perintah Uninstall (apkx uninstall <package_name> [-d id])
+    if query in ("uninstall", "remove"):
+        if not target:
+            show_error("Perintah 'apkx uninstall' memerlukan nama package aplikasi.\nContoh: apkx uninstall com.example.app")
+            raise typer.Exit(code=2)
+        pkg_target = target.strip()
+        ready, code, detail = adb.check_device_ready(device_id)
+        if not ready:
+            if as_json:
+                print(json.dumps(detail))
+            else:
+                print_banner()
+                show_error(detail.get("message", "Perangkat tidak siap."))
+            raise typer.Exit(code=1)
+
+        ok, res_code, res_detail = adb.uninstall_app(pkg_target, device_id=device_id)
+        if as_json:
+            print(json.dumps(res_detail))
+        else:
+            print_banner()
+            if ok:
+                console.print(f"[bold green][V] {res_detail.get('message', 'Aplikasi berhasil dihapus!')}[/]")
+            else:
+                show_error(res_detail.get("message", "Gagal menghapus aplikasi."))
+        raise typer.Exit(code=0 if ok else 1)
+
+    # 1.9 Sub-perintah Dump UI (apkx dump-ui [-d id] [--json])
+    if query in ("dump-ui", "dump_ui", "ui"):
+        ready, code, detail = adb.check_device_ready(device_id)
+        if not ready:
+            if as_json:
+                print(json.dumps(detail))
+            else:
+                print_banner()
+                show_error(detail.get("message", "Perangkat tidak siap."))
+            raise typer.Exit(code=1)
+
+        elements = adb.dump_ui_hierarchy(device_id=device_id)
+        width, height = adb.get_screen_size(device_id=device_id)
+
+        if as_json:
+            print(json.dumps({
+                "screen_width": width,
+                "screen_height": height,
+                "total_elements": len(elements),
+                "elements": elements,
+            }, indent=2, ensure_ascii=False))
+        else:
+            print_banner()
+            from rich.table import Table
+            table = Table(title=f"Hierarki Elemen UI Layar Aktif ({width}x{height} px)", border_style="cyan")
+            table.add_column("No", justify="right", style="cyan")
+            table.add_column("Teks / Konten", style="bold white")
+            table.add_column("Resource ID", style="dim yellow")
+            table.add_column("Titik Tengah (X, Y)", style="bold green", justify="center")
+            table.add_column("Class", style="dim")
+
+            for idx, el in enumerate(elements[:35], start=1):
+                txt = el.get("text") or el.get("content_desc") or "-"
+                res_id = (el.get("resource_id") or "-").split("/")[-1]
+                center_str = f"({el.get('center', [0,0])[0]}, {el.get('center', [0,0])[1]})"
+                cls_str = (el.get("class") or "").split(".")[-1]
+                table.add_row(str(idx), txt[:28], res_id[:28], center_str, cls_str)
+
+            console.print(table)
+            if len(elements) > 35:
+                console.print(f"[dim]* Menampilkan 35 dari {len(elements)} total elemen terdeteksi. Gunakan --json untuk data lengkap.[/dim]\n")
+        raise typer.Exit(code=0)
+
+    # 1.10 Sub-perintah Logs (apkx logs <package_name> [-t 80] [-d id])
+    if query in ("logs", "logcat"):
+        if not target:
+            show_error("Perintah 'apkx logs' memerlukan nama package aplikasi.\nContoh: apkx logs com.example.app")
+            raise typer.Exit(code=2)
+        pkg_target = target.strip()
+        ready, code, detail = adb.check_device_ready(device_id)
+        if not ready:
+            if as_json:
+                print(json.dumps(detail))
+            else:
+                print_banner()
+                show_error(detail.get("message", "Perangkat tidak siap."))
+            raise typer.Exit(code=1)
+
+        logs_data = adb.get_app_logs(pkg_target, tail=tail, device_id=device_id)
+        if as_json:
+            print(json.dumps(logs_data, indent=2, ensure_ascii=False))
+        else:
+            print_banner()
+            pid_str = f"PID: {logs_data['pid']}" if logs_data.get("pid") else "Aplikasi tidak aktif di foreground"
+            crash_indicator = "[bold red][!] Indikasi Crash Terdeteksi[/bold red]" if logs_data.get("has_crash_indicator") else "[green][V] Tidak Ada Crash Terdeteksi[/green]"
+            console.print(f"[bold cyan]Logcat Error Terfilter:[/] [yellow]{pkg_target}[/] ([dim]{pid_str}[/dim]) | {crash_indicator}\n")
+            console.print(Panel(logs_data.get("logs", ""), title=f"Logs ({logs_data.get('total_lines', 0)} baris)", border_style="cyan"))
+        raise typer.Exit(code=0)
+
+    # 1.11 Sub-perintah Wake (apkx wake [--pin <PIN>] [-d id])
+    if query in ("wake", "unlock"):
+        ready, code, detail = adb.check_device_ready(device_id)
+        if not ready:
+            if as_json:
+                print(json.dumps(detail))
+            else:
+                print_banner()
+                show_error(detail.get("message", "Perangkat tidak siap."))
+            raise typer.Exit(code=1)
+
+        wake_res = adb.ensure_device_awake(pin=pin, stay_on=True, device_id=device_id)
+        if as_json:
+            print(json.dumps(wake_res, indent=2, ensure_ascii=False))
+        else:
+            print_banner()
+            if wake_res.get("status") == "ready":
+                console.print(f"[bold green][V] {wake_res.get('message', 'Layar ponsel aktif dan terbuka.')}[/]")
+            else:
+                show_warning(wake_res.get("message", "Layar ponsel terkunci."))
+        raise typer.Exit(code=0 if wake_res.get("status") == "ready" else 1)
 
     # 2. Periksa perangkat terhubung
     try:

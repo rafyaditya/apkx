@@ -120,6 +120,32 @@ class TestAPKPackager(unittest.TestCase):
         self.assertTrue((test_dir / "AndroidManifest_readable.xml").exists())
         self.assertGreaterEqual(summary.get("total_urls", 0), 1)
 
+    def test_extract_sqlite_schema_nested_parentheses_and_quotes(self):
+        from apk_extractor.packager import extract_sqlite_schema_from_dir
+        test_dir = self.temp_out_dir / "extracted_sqlite"
+        test_dir.mkdir(parents=True, exist_ok=True)
+
+        mock_so = test_dir / "libapp.so"
+        sql_payload = (
+            b"\x00" * 20
+            + b'CREATE TABLE "users" (id INTEGER PRIMARY KEY, name VARCHAR(100), email TEXT)'
+            + b"\x00" * 20
+            + b'CREATE TABLE [transactions] (id INTEGER PRIMARY KEY, note VARCHAR(255), amount DECIMAL(10, 2), detail TEXT)'
+            + b"\x00" * 20
+        )
+        mock_so.write_bytes(sql_payload)
+
+        schema = extract_sqlite_schema_from_dir(test_dir)
+        self.assertEqual(schema["total_tables"], 2)
+        self.assertIn("users", schema["tables"])
+        self.assertIn("transactions", schema["tables"])
+
+        tx_cols = schema["tables"]["transactions"]
+        # Verify no truncation occurred on note VARCHAR(255)
+        self.assertIn("note VARCHAR(255)", tx_cols)
+        self.assertIn("amount DECIMAL(10, 2)", tx_cols)
+        self.assertIn("detail TEXT", tx_cols)
+
 
 if __name__ == "__main__":
     unittest.main()
