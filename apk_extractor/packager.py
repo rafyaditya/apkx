@@ -96,6 +96,60 @@ def sanitize_filename(name: str) -> str:
     return clean if clean else "app"
 
 
+def extract_sqlite_schema_from_dir(target_dir: Path) -> Dict[str, Any]:
+    """
+    Scans binary files (libapp.so, other .so, .dex) in target_dir to detect
+    embedded SQLite CREATE TABLE statements and column definitions.
+    """
+    if not target_dir.is_dir() and target_dir.is_file():
+        scan_files = [target_dir]
+    elif target_dir.is_dir():
+        scan_files = [
+            f for f in target_dir.rglob("*")
+            if f.is_file() and f.suffix.lower() in (".so", ".dex", ".db", ".sqlite", ".bin")
+        ]
+    else:
+        return {"total_tables": 0, "tables": {}, "raw_statements": []}
+
+    found_statements = set()
+    tables: Dict[str, List[str]] = {}
+
+    create_table_regex = re.compile(
+        rb"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([a-zA-Z0-9_]+)`?\s*\(([\s\S]*?)\)",
+        re.IGNORECASE,
+    )
+
+    for f in scan_files:
+        try:
+            data = f.read_bytes()
+            matches = create_table_regex.findall(data)
+            for tbl_bytes, body_bytes in matches:
+                try:
+                    tbl_name = tbl_bytes.decode("utf-8", errors="ignore").strip("`'\" ")
+                    body_text = body_bytes.decode("utf-8", errors="ignore").strip()
+
+                    if 1 < len(tbl_name) < 60 and len(body_text) < 2500:
+                        cols = []
+                        for col in body_text.split(","):
+                            clean_col = " ".join(col.split()).strip()
+                            if clean_col and len(clean_col) < 150:
+                                cols.append(clean_col)
+
+                        if cols and tbl_name.lower() not in ("room_master_table", "android_metadata"):
+                            tables[tbl_name] = cols
+                            found_statements.add(f"CREATE TABLE `{tbl_name}` (\n  " + ",\n  ".join(cols) + "\n);")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return {
+        "total_tables": len(tables),
+        "tables": tables,
+        "raw_statements": sorted(list(found_statements)),
+    }
+
+
 @dataclass
 class ExtractionResult:
     package_name: str
@@ -395,6 +449,18 @@ class APKPackager:
         except Exception:
             pass
 
+        # 4. Ekstrak Skema SQLite dari Biner (.so, .dex)
+        sqlite_data = extract_sqlite_schema_from_dir(extracted_dir)
+        sqlite_json_file = extracted_dir / "sqlite_schema.json"
+        sqlite_sql_file = extracted_dir / "sqlite_schema.sql"
+        if sqlite_data.get("total_tables", 0) > 0:
+            try:
+                sqlite_json_file.write_text(json.dumps(sqlite_data, indent=2, ensure_ascii=False), encoding="utf-8")
+                raw_sql = "\n\n".join(sqlite_data.get("raw_statements", []))
+                sqlite_sql_file.write_text(raw_sql, encoding="utf-8")
+            except Exception:
+                pass
+
         summary_data = {
             "app_name": app_name,
             "package_name": package_name,
@@ -409,6 +475,8 @@ class APKPackager:
             "total_classes": skeleton_data.get("total_classes", 0),
             "app_classes_count": skeleton_data.get("app_classes_count", 0),
             "class_skeleton": "class_skeleton.txt" if skeleton_txt_file.exists() else None,
+            "sqlite_tables_count": sqlite_data.get("total_tables", 0),
+            "sqlite_schema": "sqlite_schema.json" if sqlite_json_file.exists() else None,
         }
 
         # Tulis JSON
@@ -442,7 +510,8 @@ class APKPackager:
             f"Teknologi/Framework : {fw_info['framework']}\n"
             f"Lokasi Kode Utama   : {fw_info['code_path']}\n"
             f"Decoded Manifest    : {decoded_manifest.name if decoded_manifest else '-'}\n"
-            f"Total URL Ditemukan : {endpoints_data.get('total_urls', 0)}\n\n"
+            f"Total URL Ditemukan : {endpoints_data.get('total_urls', 0)}\n"
+            f"Tabel SQLite Biner  : {sqlite_data.get('total_tables', 0)} tabel terdeteksi\n\n"
             f"Domain Backend Terdeteksi:\n"
             f"{domains_str or '  (Tidak ada domain terdeteksi)'}\n\n"
             f"Contoh API Endpoints:\n"
@@ -453,6 +522,7 @@ class APKPackager:
             f"- Buka file 'AndroidManifest_readable.xml' untuk melihat permission & activities lengkap.\n"
             f"- Buka file 'class_skeleton.txt' untuk melihat seluruh struktur kelas & modul aplikasi.\n"
             f"- Buka file 'endpoints.json' untuk melihat seluruh endpoint API aplikasi.\n"
+            f"- Buka file 'sqlite_schema.sql' untuk melihat skema tabel database SQLite aplikasi.\n"
         )
         try:
             readme_file.write_text(readme_text, encoding="utf-8")

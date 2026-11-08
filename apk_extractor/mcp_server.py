@@ -21,7 +21,7 @@ from apk_extractor.axml import decode_axml
 from apk_extractor.dex import extract_class_skeleton_from_dir, format_skeleton_text
 from apk_extractor.endpoints import extract_endpoints_from_dir
 from apk_extractor.jadx import JADXManager
-from apk_extractor.packager import APKPackager, sanitize_filename
+from apk_extractor.packager import APKPackager, extract_sqlite_schema_from_dir, sanitize_filename
 
 
 def create_mcp_server() -> Any:
@@ -40,22 +40,41 @@ def create_mcp_server() -> Any:
     packager = APKPackager(adb=adb, jadx=jadx)
 
     @server.tool()
-    def apkx_list_devices() -> List[Dict[str, Any]]:
+    def apkx_list_devices() -> Dict[str, Any]:
         """
-        Lists all connected Android devices with their Serial ID, brand, model, Android OS version, and authorization status.
+        Lists all connected Android devices with their Serial ID, brand, model, Android OS version,
+        and authorization status. Includes pre-flight troubleshooting guidance if no devices are detected or unauthorized.
         """
         adb.ensure_installed()
-        return adb.get_devices_with_details()
+        ready, code, detail = adb.check_device_ready()
+        devices = adb.get_devices_with_details()
+        return {
+            "status": "ready" if ready else "not_ready",
+            "code": code,
+            "total_devices": len(devices),
+            "devices": devices,
+            "message": detail.get("message", "Perangkat siap digunakan." if ready else "Perangkat belum siap."),
+            "troubleshooting": detail.get("troubleshooting", []),
+        }
 
     @server.tool()
     def apkx_list_apps(
         device_id: Optional[str] = None,
         include_system_apps: bool = False,
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """
         Lists installed packages on the connected Android device, automatically resolved to human-friendly app names.
         """
         adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return [{
+                "status": "error",
+                "code": code,
+                "message": detail.get("message", "Perangkat tidak siap."),
+                "troubleshooting": detail.get("troubleshooting", []),
+            }]
+
         packages = adb.list_packages(
             device_id=device_id,
             third_party_only=not include_system_apps,
@@ -71,6 +90,9 @@ def create_mcp_server() -> Any:
         directly from the Android device without downloading the APK.
         """
         adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
         return adb.get_package_quick_info(package_name, device_id=device_id)
 
     @server.tool()
@@ -84,6 +106,9 @@ def create_mcp_server() -> Any:
         unpacks its contents, decodes the AndroidManifest.xml, extracts API endpoints, and generates class skeletons.
         """
         adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
         out_path = Path(output_dir)
 
         # 1. Resolve package
@@ -323,6 +348,286 @@ def create_mcp_server() -> Any:
             "endpoints": matched_urls[:limit],
             "has_more": len(matched_urls) > limit or len(matched_domains) > limit,
         }
+
+    @server.tool()
+    def apkx_launch_app(
+        package_name: str,
+        activity_name: Optional[str] = None,
+        restart: bool = True,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Launches an installed application on the connected Android device using ADB.
+        Can restart the app from a clean state (am start -S) and auto-resolves launcher activity if omitted.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        success = adb.launch_app(package_name, activity_name=activity_name, restart=restart, device_id=device_id)
+        return {
+            "status": "success" if success else "error",
+            "package_name": package_name,
+            "activity_name": activity_name,
+            "restarted": restart,
+            "message": "Aplikasi berhasil dibuka di perangkat." if success else "Gagal membuka aplikasi di perangkat.",
+        }
+
+    @server.tool()
+    def apkx_take_screenshot(
+        output_path: str = "output/screen.png",
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Captures a high-speed lossless screenshot from the connected Android device
+        and saves it locally. Returns image path, dimensions, and file size.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        dest = Path(output_path).resolve()
+        ok = adb.take_screenshot(dest, device_id=device_id)
+        width, height = adb.get_screen_size(device_id=device_id)
+        if ok and dest.is_file():
+            return {
+                "status": "success",
+                "path": str(dest),
+                "size_bytes": dest.stat().st_size,
+                "screen_width": width,
+                "screen_height": height,
+            }
+        return {
+            "status": "error",
+            "message": f"Gagal mengambil tangkapan layar perangkat ke {output_path}.",
+        }
+
+    @server.tool()
+    def apkx_dump_ui_hierarchy(device_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Dumps the active screen UI hierarchy via uiautomator and returns a clean list of interactive elements,
+        complete with text, resource-id, class, bounds, and calculated center click points (center_x, center_y).
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        elements = adb.dump_ui_hierarchy(device_id=device_id)
+        width, height = adb.get_screen_size(device_id=device_id)
+        return {
+            "total_elements": len(elements),
+            "screen_width": width,
+            "screen_height": height,
+            "elements": elements,
+        }
+
+    @server.tool()
+    def apkx_interact(
+        action: str,
+        x: Optional[int] = None,
+        y: Optional[int] = None,
+        keycode: Optional[int] = None,
+        text: Optional[str] = None,
+        swipe_coords: Optional[List[int]] = None,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Simulates user input on the device:
+        - action='tap': requires x, y coordinates
+        - action='back': presses Android Back button (KEYCODE_BACK / 4)
+        - action='home': presses Android Home button
+        - action='enter': presses Enter key
+        - action='keyevent': triggers specific Android keycode
+        - action='text': types text into active input field
+        - action='swipe': swipes between coordinates [x1, y1, x2, y2, duration_ms]
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        coords_tuple = tuple(swipe_coords) if swipe_coords and len(swipe_coords) >= 4 else None
+        ok = adb.input_interact(
+            action=action,
+            x=x,
+            y=y,
+            keycode=keycode,
+            text=text,
+            swipe_coords=coords_tuple,
+            device_id=device_id,
+        )
+        return {
+            "status": "success" if ok else "error",
+            "action": action,
+            "message": f"Aksi '{action}' berhasil dieksekusi." if ok else f"Gagal mengeksekusi aksi '{action}'.",
+        }
+
+    @server.tool()
+    def apkx_extract_sqlite_schema(target_path: str) -> Dict[str, Any]:
+        """
+        Scans an extracted APK directory, .so binary (e.g. libapp.so), or DEX files
+        for embedded SQLite CREATE TABLE statements and column definitions.
+        """
+        p = Path(target_path)
+        if not p.exists():
+            return {"error": f"Path '{target_path}' tidak ditemukan.", "total_tables": 0, "tables": {}}
+
+        schema = extract_sqlite_schema_from_dir(p)
+        return schema
+
+    @server.tool()
+    def apkx_ensure_device_awake(
+        pin: Optional[str] = None,
+        stay_on: bool = True,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Ensures connected device screen is awake and unlocked.
+        - Enables 'Stay Awake while plugged in via USB' (stay_on=True).
+        - Wakes device if asleep.
+        - Unlocks swipe lockscreen automatically.
+        - Unlocks PIN/password if pin is provided or APKX_DEVICE_PIN env is set.
+        - Safely alerts without guessing if locked with PIN and no PIN is provided.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        return adb.ensure_device_awake(pin=pin, stay_on=stay_on, device_id=device_id)
+
+    @server.tool()
+    def apkx_get_current_screen(device_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Returns the active top-level package name, Activity class name, component,
+        and running process PID currently displayed on the device.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        return adb.get_current_screen(device_id=device_id)
+
+    @server.tool()
+    def apkx_get_app_logs(
+        package_name: str,
+        tail: int = 80,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fetches targeted logcat errors, Flutter exceptions, and crash stacktraces
+        specifically filtered for the specified application package/PID.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        return adb.get_app_logs(package_name=package_name, tail=tail, device_id=device_id)
+
+    @server.tool()
+    def apkx_reset_app_data(
+        package_name: str,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Instantly clears all data, databases, preferences, and cache for an application (pm clear).
+        Allows testing fresh-install / onboarding state in 0.5s without re-installing.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        ok = adb.reset_app_data(package_name=package_name, device_id=device_id)
+        return {
+            "status": "success" if ok else "error",
+            "package_name": package_name,
+            "message": f"Data aplikasi '{package_name}' berhasil dibersihkan (fresh state)." if ok else f"Gagal membersihkan data '{package_name}'.",
+        }
+
+    @server.tool()
+    def apkx_open_deep_link(
+        url: str,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Triggers an Android Intent VIEW to open a specific deep link, scheme, or route URL directly.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        ok = adb.open_deep_link(url=url, device_id=device_id)
+        return {
+            "status": "success" if ok else "error",
+            "url": url,
+            "message": f"Deep link '{url}' berhasil dieksekusi." if ok else f"Gagal mengeksekusi deep link '{url}'.",
+        }
+
+    @server.tool()
+    def apkx_toggle_night_mode(
+        enable: bool = True,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Toggles system Dark Mode (enable=True) or Light Mode (enable=False)
+        to verify app UI responsiveness across themes.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        ok = adb.toggle_night_mode(enable=enable, device_id=device_id)
+        mode_str = "Dark Mode" if enable else "Light Mode"
+        return {
+            "status": "success" if ok else "error",
+            "mode": mode_str,
+            "message": f"Mode tampilan sistem diubah ke {mode_str}." if ok else f"Gagal mengubah mode tampilan ke {mode_str}.",
+        }
+
+    @server.tool()
+    def apkx_install_apk(
+        apk_path: str,
+        reinstall: bool = True,
+        grant_permissions: bool = True,
+        allow_downgrade: bool = True,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Installs a local APK file (.apk or .apks) onto the connected Android device using ADB.
+        Automatically handles reinstall (-r), runtime permission grants (-g), and downgrade allowance (-d).
+        Diagnoses common issues (e.g. signature mismatch / UPDATE_INCOMPATIBLE).
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        ok, res_code, res_detail = adb.install_apk(
+            apk_path=apk_path,
+            reinstall=reinstall,
+            grant_permissions=grant_permissions,
+            allow_downgrade=allow_downgrade,
+            device_id=device_id,
+        )
+        return res_detail
+
+    @server.tool()
+    def apkx_uninstall_app(
+        package_name: str,
+        keep_data: bool = False,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Uninstalls an application package from the connected Android device using ADB (adb uninstall).
+        Useful for clean reinstalls or resolving signature mismatch (INSTALL_FAILED_UPDATE_INCOMPATIBLE).
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        ok, res_code, res_detail = adb.uninstall_app(
+            package_name=package_name,
+            keep_data=keep_data,
+            device_id=device_id,
+        )
+        return res_detail
 
     return server
 

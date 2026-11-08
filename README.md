@@ -26,11 +26,17 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
    * Mendekode binary `AndroidManifest.xml` menjadi teks XML terbaca tanpa AAPT/Java (`AndroidManifest_readable.xml`), serta memindai seluruh URL backend, domain, dan REST/GraphQL API ke `endpoints.json`.
 7. **Fast DEX Class Skeleton Parser (<50ms):**
    * Membaca struktur paket dan kelas aplikasi tanpa pembengkakan token AI ke `class_skeleton.txt`.
-8. **Headless On-Demand JADX Decompiler:**
+8. **Ekstraksi Skema SQLite dari Biner Native (`libapp.so` / DEX):**
+   * Memindai definisi tabel (`CREATE TABLE`), nama kolom, dan relasi database langsung dari file biner terkompilasi Flutter AOT (`libapp.so`) maupun bytecode Android DEX ke `sqlite_schema.sql` dan `sqlite_schema.json`.
+9. **Headless On-Demand JADX Decompiler:**
    * Mengunduh JADX portable otomatis untuk dekompilasi source code Java/Kotlin, termasuk dekompilasi selektif untuk satu kelas tertentu (`--decompile-class`).
-9. **AI-Native MCP Server & Antigravity Skill:**
-   * Siap berkolaborasi langsung dengan AI Coding Agent (Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) via `apkx setup`.
-10. **Zero-Config ADB (Auto-Download):**
+10. **Live Device Traversal & UI/UX Inspection via ADB:**
+    * Mengontrol perangkat secara live: screenshot berkecepatan tinggi (`exec-out screencap`), ekstraksi posisi tombol presisi (`dump_ui_hierarchy`), simulasi interaksi sentuh (tap, swipe, input teks, tombol kembali), bangunkan layar, dan auto-unlock PIN.
+11. **Autonomous Closed-Loop Testing & APK Deployment:**
+    * Pasang langsung APK hasil build ke perangkat fisik (`apkx_install_apk`), reset data seketika (`pm clear`), diagnosa crash/exception tertarget via filtered logcat (`apkx_get_app_logs`), serta verifikasi adaptasi Dark Mode / Light Mode.
+12. **AI-Native MCP Server & Antigravity Skill (23 Tools):**
+    * Siap berkolaborasi langsung dengan AI Coding Agent (Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) via `apkx setup`, dilengkapi protokol pre-flight check perangkat dan SOP blueprint 8 fase.
+13. **Zero-Config ADB (Auto-Download):**
     * Tidak perlu memasang Android Studio yang besar! Jika ADB belum terpasang, `apkx` otomatis mengunduh Google Platform-Tools resmi (~12 MB) secara instan. Bekerja di Windows, macOS, dan Linux.
 
 ---
@@ -195,8 +201,8 @@ Perintah ini otomatis:
 1. Memindai AI coding agent yang terpasang dan mendaftarkan server MCP `apkx serve`.
 2. Menyinkronkan **Skill Antigravity** (`apkx-android-blueprint`) ke `~/.gemini/config/skills/` agar AI Agent memahami SOP analisis APK secara metodis.
 
-Server MCP `apkx` menyediakan 10 tools siap pakai:
-* `apkx_list_devices`: Daftar perangkat Android yang terhubung.
+Server MCP `apkx` menyediakan 23 tools siap pakai:
+* `apkx_list_devices`: Pre-flight check & daftar perangkat Android terhubung lengkap dengan status kesiapan (READY, NO_DEVICE, UNAUTHORIZED) dan panduan troubleshooting.
 * `apkx_list_apps`: Daftar aplikasi terpasang (nama aplikasi ramah + package ID).
 * `apkx_get_app_info`: Audit teknis cepat (versi, SDK, permission) tanpa unduh APK.
 * `apkx_pull_and_extract`: Tarik APK/APKS dari ponsel dan ekstrak seluruh artefak blueprint.
@@ -206,6 +212,19 @@ Server MCP `apkx` menyediakan 10 tools siap pakai:
 * `apkx_inspect_class`: Dekompilasi on-demand satu kelas spesifik via JADX.
 * `apkx_find_classes`: Cari kelas spesifik (misal: Auth, Repository, ViewModel) berdasarkan kata kunci.
 * `apkx_search_endpoints`: Filter endpoint dan domain API berdasarkan kata kunci (misal: login, api, v1, graphql).
+* `apkx_extract_sqlite_schema`: Ekstrak skema tabel SQLite dari biner `libapp.so` atau DEX secara otomatis.
+* `apkx_install_apk`: Pasang file APK ke perangkat fisik (auto flag -r, -g, -d & diagnosa error).
+* `apkx_uninstall_app`: Hapus instalasi aplikasi dari perangkat untuk reinstall bersih atau ganti signature.
+* `apkx_launch_app`: Buka aplikasi target atau aplikasi kloningan di HP Android (`am start -S`).
+* `apkx_take_screenshot`: Ambil tangkapan layar perangkat berkecepatan tinggi via `adb exec-out`.
+* `apkx_dump_ui_hierarchy`: Dapatkan posisi titik tengah `[center_x, center_y]` seluruh tombol & elemen UI.
+* `apkx_interact`: Jalankan aksi tap koordinat, tombol kembali (back), home, swipe, atau pengetikan teks.
+* `apkx_ensure_device_awake`: Bangunkan layar, auto-unlock PIN/swipe, dan aktifkan pencegah layar tidur USB.
+* `apkx_get_current_screen`: Deteksi nama Activity & proses PID yang sedang aktif di puncak layar.
+* `apkx_get_app_logs`: Perekam log error & crash tertarget khusus aplikasi target (Flutter/Android).
+* `apkx_reset_app_data`: Reset total data aplikasi (`pm clear`) untuk pengujian ulang fresh-install state.
+* `apkx_open_deep_link`: Buka rute halaman spesifik via URL/Deep Link Intent secara langsung.
+* `apkx_toggle_night_mode`: Beralih antara Dark Mode dan Light Mode untuk verifikasi visual multi-tema.
 
 ### 14. Pembaruan Otomatis (Self-Update)
 Periksa dan perbarui `apkx` ke versi terbaru langsung dari GitHub:

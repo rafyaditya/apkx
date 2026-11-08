@@ -16,58 +16,48 @@ ANTIGRAVITY_SKILL_NAME = "apkx-android-blueprint"
 
 SKILL_TEMPLATE = """---
 name: apkx-android-blueprint
-description: Master skill for reverse engineering, inspecting, and translating extracted Android APKs/APKS (using apkx) into clean architectural blueprints and cloned applications (Flutter, React Native, or Native Android). Use whenever the user asks to analyze an Android app extracted via apkx, inspect APK manifests, examine DEX class skeletons, find API endpoints, or rebuild/clone an app's features from APK blueprints.
+description: Master skill for reverse engineering, inspecting, live UI/UX traversal, and translating extracted Android APKs/APKS (using apkx) into clean architectural blueprints and cloned applications (Flutter, React Native, or Native Android). Use whenever the user asks to analyze an Android app extracted via apkx, inspect APK manifests, examine DEX class skeletons, find API endpoints, explore target app screens via ADB, or rebuild/clone an app's features with live device verification.
 ---
 
-# Android APK Reverse Engineering & Blueprint Synthesis (apkx)
+# Android APK Reverse Engineering, Live UI Traversal & Blueprint Synthesis (apkx)
 
-Tujuan utama skill ini adalah memandu AI Agent dalam menganalisis berkas APK/APKS hasil ekstraksi `apkx` secara metodis, mengekstrak arsitektur inti aplikasi, menemukan endpoint API backend, dan menyusun cetak biru (*blueprint*) yang siap diimplementasikan ulang (dikloning) ke framework modern seperti **Flutter**, **React Native**, atau **Kotlin Clean Architecture**.
-
----
-
-## 1. Prinsip Utama: Clean-Room Reverse Engineering
-
-1. **Evidence-Based (Berbasis Bukti):** Jangan pernah menebak struktur data, endpoint API, atau logika bisnis jika Anda bisa memverifikasinya langsung dari artefak `apkx` (Manifest, `endpoints.json`, `class_skeleton.txt`, atau dekompilasi JADX).
-2. **Precision Over Context Bloat (Fokus & Presisi):** Jangan membaca seluruh file dump raksasa jika tidak diperlukan. Gunakan tool pencarian terarah seperti `apkx_find_classes` dan `apkx_search_endpoints` untuk menemukan jarum di tumpukan jerami.
-3. **Clean-Room Reimplementation:** Hasil reverse engineering digunakan sebagai acuan arsitektur (kontrak API, model data, dan alur UI), kemudian dibangun ulang secara bersih menggunakan standar dan *best practices* framework target (misalnya menerapkan *Flutter Anti-Slop*).
+Tujuan utama skill ini adalah memandu AI Agent dalam menganalisis berkas APK/APKS hasil ekstraksi `apkx` secara metodis, mengekstrak arsitektur inti aplikasi, memetakan skema database (termasuk SQLite di `libapp.so`), menjelajahi seluruh fitur UI aplikasi target secara langsung di ponsel melalui ADB (*screencap & tap*), menyusun cetak biru (*blueprint*) arsitektur, dan memverifikasi aplikasi hasil kloningan langsung di perangkat fisik dengan siklus perbaikan mandiri (*Self-Healing Loop*).
 
 ---
 
-## 2. Alur Investigasi 5 Langkah (5-Phase Workflow)
+## 1. Prinsip Utama: Clean-Room Reverse Engineering & Verification
 
-### Fase 1: Deteksi Framework & Quick Audit
-Sebelum memeriksa kode secara mendalam, kenali teknologi dasar aplikasi target:
-1. Jalankan `apkx_get_app_info(package_name)`.
-2. Periksa Framework terdeteksi:
-   * **Flutter:** Memiliki `libflutter.so` dan `libapp.so`. Logika di compiled native AOT `libapp.so`. Fokus pada string URL di `endpoints.json` dan resource asset di `assets/flutter_assets/`.
-   * **React Native:** Memiliki `index.android.bundle`. Fokus pada pemetaan URL, nama rute komponen, dan state schema dari bundle JS.
-   * **Java/Kotlin Native:** Menggunakan pure DEX bytecode multi-split. Kode sumber Java/Kotlin dapat didekomposisi sempurna secara selektif via `apkx_inspect_class`.
+1. **Evidence-Based (Berbasis Bukti):** Jangan pernah menebak struktur data, endpoint API, atau logika bisnis jika Anda bisa memverifikasinya langsung dari artefak `apkx` (Manifest, `endpoints.json`, `class_skeleton.txt`, `sqlite_schema.sql`, atau dekompilasi JADX).
+2. **Live Visual Grounding (Eksplorasi Layar Nyata):** Blueprint statis tidak menggambarkan alur UX secara utuh. Buka aplikasi target di ponsel via ADB, ambil screenshot untuk tiap tab dan modal, lalu gunakan penalaran visual multimodal AI untuk mengidentifikasi tata letak, warna, dan kelemahan UI aplikasi asli.
+3. **Clean-Room Reimplementation:** Hasil reverse engineering digunakan sebagai acuan arsitektur (kontrak API, model data, dan alur UI), kemudian dibangun ulang secara bersih menggunakan standar framework target (misalnya menerapkan *Flutter Anti-Slop*).
+4. **Autonomous Runtime Verification (Self-Healing):** Jangan anggap pekerjaan selesai sebelum aplikasi yang dibangun berhasil diinstall ke HP dan diuji coba langsung. Jalankan simulasi interaksi (tap, form input, submit) dan segera perbaiki jika ditemukan error atau glitch visual.
 
-### Fase 2: Pemetaan Entry-Point & Permissions
-Gunakan tool `apkx_get_manifest(target_path)` untuk membaca `AndroidManifest_readable.xml`:
-1. Cari Main Launcher Activity (`android.intent.action.MAIN` + `android.intent.category.LAUNCHER`).
-2. Identifikasi Deep Links & Navigasi URL (`<data android:scheme="..." android:host="..."/>`).
-3. Audit Izin (Permissions).
+---
 
-### Fase 3: Pemetaan Backend & API Endpoints
-Gunakan tool `apkx_search_endpoints(target_path, query=...)`:
-1. Cari Domain Utama (`apkx_search_endpoints(target_path)`).
-2. Cari Endpoint Fitur Tertentu:
-   * Otentikasi: `query="auth"` atau `query="login"`.
-   * API Versi: `query="/v1/"` atau `query="/v2/"`.
-   * Fitur Utama: `query="product"`, `query="user"`, atau `query="cart"`.
+## 2. Alur Kerja Utama 8 Fase (8-Phase Master Workflow)
 
-### Fase 4: Bedah Model Data & Logika Bisnis (Java/Kotlin Native)
-1. Cari Kelas Relevan dengan `apkx_find_classes(target_path, query=...)`.
-2. Dekomposisi On-Demand dengan `apkx_inspect_class(target_apk, class_name)`.
-
-### Fase 5: Sintesis Blueprint Kloning Aplikasi
-Susun laporan Blueprint Arsitektur untuk pengguna:
-1. Ringkasan Identitas Aplikasi.
-2. Pohon Arsitektur Fitur.
-3. Kontrak API & Model Data (Entity / DTO).
-4. Rancangan Implementasi di Framework Target (Flutter / React Native).
+0. **Fase 0: Pre-Flight Check & Panduan Perangkat** (Cek koneksi perangkat via `apkx_list_devices()`; beri pesan panduan 4-langkah ramah jika belum terhubung atau butuh izin RSA).
+1. **Fase 1: Deteksi Framework & Quick Audit** (Audit versi, SDK, dan teknologi Flutter/RN/Native).
+2. **Fase 2: Pemetaan Entry-Point, Permissions & Skema Database** (Manifest + pemindaian SQLite biner).
+3. **Fase 3: Pemetaan Backend & Endpoint API** (Pencarian domain dan rute API).
+4. **Fase 4: Live Target App Exploration via ADB** (Buka aplikasi target via `apkx_launch_app`, ambil tangkapan layar `apkx_take_screenshot`, navigasi tab/FAB/drawer via `apkx_interact`, dan baca titik tombol via `apkx_dump_ui_hierarchy`).
+5. **Fase 5: Sintesis Blueprint Kloning Aplikasi** (Kontrak API, skema entity data, dan daftar perbaikan UI).
+6. **Fase 6: Rekonstruksi Aplikasi Bersih** (Pembangunan arsitektur Flutter/Clean Architecture dengan standar anti-slop).
+7. **Fase 7: Post-Deployment Live Device Testing & Self-Healing Loop** (Install ke ponsel via `apkx_install_apk`, jalankan aplikasi baru via `apkx_launch_app`, verifikasi visual lewat screenshot `apkx_take_screenshot`, simulasikan input form via `apkx_interact`, dan perbaiki bug secara otomatis jika ditemukan anomali).
 """
+
+
+def load_skill_content() -> str:
+    """Loads skill content from local .agents file if available, or falls back to template."""
+    local_file = Path(__file__).resolve().parent.parent / ".agents" / "skills" / ANTIGRAVITY_SKILL_NAME / "SKILL.md"
+    if local_file.is_file():
+        try:
+            content = local_file.read_text(encoding="utf-8").strip()
+            if len(content) > 100:
+                return content
+        except Exception:
+            pass
+    return SKILL_TEMPLATE.strip()
 
 
 def sync_antigravity_skill() -> Dict[str, str]:
@@ -76,7 +66,8 @@ def sync_antigravity_skill() -> Dict[str, str]:
         skill_dir = Path.home() / ".gemini" / "config" / "skills" / ANTIGRAVITY_SKILL_NAME
         skill_dir.mkdir(parents=True, exist_ok=True)
         skill_file = skill_dir / "SKILL.md"
-        skill_file.write_text(SKILL_TEMPLATE.strip() + "\n", encoding="utf-8")
+        content = load_skill_content()
+        skill_file.write_text(content + "\n", encoding="utf-8")
         return {
             "client": "Antigravity Skill (apkx-android-blueprint)",
             "status": "success",
