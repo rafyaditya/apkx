@@ -352,7 +352,6 @@ class TestADBManager(unittest.TestCase):
 
     def test_install_apk_invalid_type(self):
         import tempfile
-        from pathlib import Path
         with tempfile.NamedTemporaryFile(suffix=".txt") as tmp:
             manager = ADBManager(adb_path="mock_adb")
             ok, code, detail = manager.install_apk(tmp.name)
@@ -436,6 +435,41 @@ class TestADBManager(unittest.TestCase):
         ok, code, detail = manager.uninstall_app("  ")
         self.assertFalse(ok)
         self.assertEqual(code, "INVALID_PACKAGE")
+
+    @patch("subprocess.run")
+    def test_input_interact_text_escaping_and_newlines(self, mock_run):
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_run.return_value = mock_proc
+
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Test special characters and globbing escaping
+        ok = manager.input_interact("text", text="Hello* [World]? $100 & 'quotes'")
+        self.assertTrue(ok)
+        cmd_text = mock_run.call_args[0][0]
+        # Verify shell input command
+        self.assertEqual(cmd_text[:3], ["mock_adb", "shell", "input"])
+        self.assertEqual(cmd_text[3], "text")
+        # Verify wildcards and spaces escaped
+        self.assertIn("Hello\\*", cmd_text[4])
+        self.assertIn("\\[World\\]\\?", cmd_text[4])
+        self.assertIn("\\$100", cmd_text[4])
+        self.assertIn("\\&", cmd_text[4])
+        self.assertIn("\\'quotes\\'", cmd_text[4])
+
+        # Test newline split into text + keyevent 66
+        mock_run.reset_mock()
+        ok_nl = manager.input_interact("text", text="Line1\nLine2")
+        self.assertTrue(ok_nl)
+        # Should have called subprocess.run 3 times: Line1 text, Enter keyevent, Line2 text
+        self.assertEqual(mock_run.call_count, 3)
+        first_call_cmd = mock_run.call_args_list[0][0][0]
+        second_call_cmd = mock_run.call_args_list[1][0][0]
+        third_call_cmd = mock_run.call_args_list[2][0][0]
+        self.assertIn("Line1", first_call_cmd)
+        self.assertIn("66", second_call_cmd)
+        self.assertIn("Line2", third_call_cmd)
 
 
 if __name__ == "__main__":

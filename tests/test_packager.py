@@ -146,6 +146,28 @@ class TestAPKPackager(unittest.TestCase):
         self.assertIn("amount DECIMAL(10, 2)", tx_cols)
         self.assertIn("detail TEXT", tx_cols)
 
+    def test_clean_re_extraction_purges_stale_files(self):
+        target_dir = self.temp_out_dir / "target_app"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        # Create stale files from previous run
+        (target_dir / "stale_file.txt").write_text("old data", encoding="utf-8")
+        stale_sub = target_dir / "old_split"
+        stale_sub.mkdir()
+        (stale_sub / "old.dex").write_bytes(b"old dex data")
+
+        # Create new APK
+        apk_path = self.temp_out_dir / "new_app.apk"
+        with zipfile.ZipFile(apk_path, "w") as zf:
+            zf.writestr("classes.dex", b"new dex data")
+
+        self.packager.unpack(apk_path, target_dir)
+
+        # Verify old files are gone and new files exist
+        self.assertFalse((target_dir / "stale_file.txt").exists(), "Stale file should be purged")
+        self.assertFalse((stale_sub / "old.dex").exists(), "Stale subfolder file should be purged")
+        self.assertTrue((target_dir / "classes.dex").exists(), "New unpacked file should exist")
+        self.assertEqual((target_dir / "classes.dex").read_bytes(), b"new dex data")
+
 
 if __name__ == "__main__":
     unittest.main()

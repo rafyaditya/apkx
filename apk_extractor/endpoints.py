@@ -7,7 +7,7 @@ import io
 import re
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, Set
 
 URL_REGEX = re.compile(rb"https?://[a-zA-Z0-9\.\-_]+(?::\d+)?(?:/[a-zA-Z0-9\.\-_~:/?#[\]@!$&'()*+,;=%]*)?")
 
@@ -92,6 +92,17 @@ def extract_endpoints_from_file(file_path: Path) -> Dict[str, Any]:
 
     if not file_path.is_file():
         return {
+            "total_urls": 0,
+            "domains": [],
+            "api_endpoints": [],
+            "all_endpoints": [],
+        }
+
+    archive_exts = {".apk", ".apks", ".zip"}
+    if file_path.suffix.lower() in archive_exts and not zipfile.is_zipfile(file_path):
+        return {
+            "status": "error",
+            "error": f"Berkas '{file_path.name}' bukan arsip zip/APK yang valid atau berkas rusak.",
             "total_urls": 0,
             "domains": [],
             "api_endpoints": [],

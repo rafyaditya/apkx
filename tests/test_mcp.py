@@ -2,7 +2,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from apk_extractor.mcp_server import create_mcp_server
 
@@ -353,6 +353,32 @@ class TestMCPServer(unittest.TestCase):
             async def run_call():
                 res = await self.server.call_tool("apkx_get_endpoints", {"target_path": str(apk_path)})
                 self.assertIn("api.sample.com", str(res))
+
+            asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=["com.corrupt.app"])
+    @patch("apk_extractor.app_names.resolve_apps")
+    @patch("apk_extractor.adb.ADBManager.get_package_apk_paths", return_value=["/data/app/com.corrupt.app/base.apk"])
+    @patch("apk_extractor.adb.ADBManager.pull_file")
+    def test_pull_and_extract_corrupt_apk_returns_error(
+        self, mock_pull, mock_paths, mock_resolve, mock_pkgs, mock_ready, mock_ensured
+    ):
+        from apk_extractor.app_names import AppInfo
+        mock_resolve.return_value = [AppInfo(app_name="CorruptApp", package_name="com.corrupt.app")]
+        with tempfile.TemporaryDirectory() as tmp_d:
+            def fake_pull(remote, local, device_id=None):
+                Path(local).write_bytes(b"not a valid zip binary content")
+            mock_pull.side_effect = fake_pull
+
+            async def run_call():
+                res = await self.server.call_tool("apkx_pull_and_extract", {
+                    "query_or_package": "com.corrupt.app",
+                    "output_dir": tmp_d,
+                })
+                self.assertIn("error", str(res))
+                self.assertIn("rusak atau tidak lengkap", str(res))
 
             asyncio.run(run_call())
 

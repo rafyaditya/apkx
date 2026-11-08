@@ -1,8 +1,9 @@
 import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
-from apk_extractor.endpoints import extract_endpoints_from_dir
+from apk_extractor.endpoints import extract_endpoints_from_dir, extract_endpoints_from_file
 
 
 class TestEndpointsExtractor(unittest.TestCase):
@@ -38,6 +39,22 @@ class TestEndpointsExtractor(unittest.TestCase):
         res = extract_endpoints_from_dir(Path("/nonexistent/directory/test"))
         self.assertEqual(res["total_urls"], 0)
         self.assertEqual(res["domains"], [])
+
+    def test_extract_endpoints_corrupt_archive(self):
+        corrupt_apk = self.temp_dir / "broken.apk"
+        corrupt_apk.write_bytes(b"not a valid zip file")
+        res = extract_endpoints_from_file(corrupt_apk)
+        self.assertEqual(res["status"], "error")
+        self.assertIn("bukan arsip zip/APK", res["error"])
+        self.assertEqual(res["total_urls"], 0)
+
+    def test_extract_endpoints_from_file_valid_apk(self):
+        valid_apk = self.temp_dir / "valid.apk"
+        with zipfile.ZipFile(valid_apk, "w") as zf:
+            zf.writestr("classes.dex", b"test https://api.valid.com/v1/users data")
+        res = extract_endpoints_from_file(valid_apk)
+        self.assertEqual(res["total_urls"], 1)
+        self.assertIn("api.valid.com", res["domains"])
 
 
 if __name__ == "__main__":

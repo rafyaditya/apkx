@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import shutil
 import sys
@@ -340,6 +339,16 @@ class APKPackager:
         - Jika .apk: langsung diekstrak secara aman.
         - Jika .apks: mengekstrak seluruh pecahan APK, di mana tiap split dibongkar ke subfolder.
         """
+        # Bersihkan file dan subfolder lama di target_dir agar tidak mencampur versi lama
+        if target_dir.exists():
+            for item in target_dir.iterdir():
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                    else:
+                        item.unlink(missing_ok=True)
+                except Exception:
+                    pass
         target_dir.mkdir(parents=True, exist_ok=True)
 
         if archive_path.suffix.lower() == ".apk":

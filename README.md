@@ -270,7 +270,7 @@ apkx update --check
 | :--- | :--- | :--- | :--- |
 | `[query]` | - | String | Nama aplikasi, package ID, atau sub-perintah (`devices`, `screenshot`, `install`, `uninstall`, `logs`, `dump-ui`, `wake`, `serve`, `setup`, `update`). |
 | `[target]` | - | String | Target berkas APK/APKS atau nama package untuk perintah `install`, `uninstall`, dan `logs`. |
-| `--devices` | - | Flag | Menampilkan daftar perangkat Android yang terhubung ke komputer. |
+| `--devices` | - | Flag | Menampilkan daftar perangkat Android yang terhubung (output JSON berupa array `List[DeviceInfo]` atau `[]` jika kosong). |
 | `--output` | `-o` | Path | Direktori utama penyimpanan hasil (default: `./output`). |
 | `--device` | `-d` | String | Serial ID perangkat spesifik jika ada lebih dari satu ponsel terhubung. |
 | `--tail` | `-t` | Int | Jumlah baris logcat terakhir untuk perintah `apkx logs` (default: 80). |
@@ -280,7 +280,7 @@ apkx update --check
 | `--system` | `-s` | Flag | Memfilter hanya aplikasi bawaan sistem Android. |
 | `--apk-only` | `-k` | Flag | Hanya simpan installer APK (.apk/.apks) tanpa mengekstrak isinya. |
 | `--extract-only` | `-x` | Flag | Hanya ekstrak isi APK (dex, res, assets) tanpa menyimpan file APK. |
-| `--both` | `-b` | Flag | Simpan file installer APK sekaligus ekstrak isinya (default). |
+| `--both` | `-b` | Flag | Simpan file installer APK sekaligus ekstrak isinya (default eksekusi langsung CLI). |
 | `--info`, `--analyze` | - | Flag | Tampilkan audit dan informasi teknis aplikasi tanpa ekstraksi. |
 | `--recent` | `-r` | Flag | Urutkan aplikasi berdasarkan waktu instalasi atau pembaruan terbaru. |
 | `--json` | - | Flag | Keluarkan output dalam format JSON untuk otomasi dan scripting. |

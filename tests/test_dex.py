@@ -1,7 +1,6 @@
 import struct
 import unittest
-from pathlib import Path
-from apk_extractor.dex import extract_class_skeleton_from_dir, format_skeleton_text, parse_dex_classes
+from apk_extractor.dex import format_skeleton_text, parse_dex_classes
 
 
 def create_minimal_dex(classes: list) -> bytes:

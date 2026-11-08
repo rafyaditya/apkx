@@ -1,8 +1,6 @@
 import unittest
 from apk_extractor.app_names import (
     format_fallback_app_name,
-    POPULAR_APPS,
-    is_framework_or_wrapper_activity,
     _split_compound_words,
 )
 

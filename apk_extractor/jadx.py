@@ -189,7 +189,7 @@ class JADXManager:
                 str(temp_dir),
                 str(target_path),
             ]
-            res = subprocess.run(
+            subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

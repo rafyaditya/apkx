@@ -4,6 +4,7 @@ Exposes ADB device operations, APK extraction, manifest decoding, and on-demand 
 """
 
 import json
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -178,7 +179,15 @@ def create_mcp_server() -> Any:
         # Unpack
         app_folder_name = sanitize_filename(extract_res.app_name)
         app_extracted_folder = extracted_dir / app_folder_name
-        packager.unpack(extract_res.output_path, app_extracted_folder)
+        try:
+            packager.unpack(extract_res.output_path, app_extracted_folder)
+        except (zipfile.BadZipFile, OSError, Exception) as e:
+            return {
+                "status": "error",
+                "message": f"Gagal mengekstrak APK: Berkas arsip rusak atau tidak lengkap ({e}).",
+                "apk_path": str(extract_res.output_path.resolve()) if extract_res.output_path.exists() else None,
+                "is_split": extract_res.is_split,
+            }
 
         # Summary analysis (Manifest, Endpoints, Skeleton)
         summary = packager.generate_analysis_summary(

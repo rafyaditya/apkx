@@ -4,13 +4,15 @@ Decodes compiled AndroidManifest.xml and layout binary XML files into human-read
 """
 
 import struct
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List
 
 
 def decode_axml(data: bytes) -> str:
     """
     Decodes binary Android Binary XML (AXML) into standard XML text.
     If the data is already plain text XML, returns it decoded.
+    All discovered XML namespaces are hoisted directly to the root element
+    ensuring standard XML specification compliance and eliminating unbound prefix errors.
     """
     if not data or len(data) < 8:
         return ""
@@ -24,27 +26,20 @@ def decode_axml(data: bytes) -> str:
         except Exception:
             return ""
 
+    # Pass 1: Ekstrak string pool dan kumpulkan seluruh namespace (0x0100)
     offset = header_size
     strings: List[str] = []
-    namespaces: Dict[str, str] = {}
-    pending_namespaces: List[Tuple[str, str]] = []
-    declared_namespaces: Set[str] = set()
-    xml_lines: List[str] = ['<?xml version="1.0" encoding="utf-8"?>']
-    indent = 0
+    all_namespaces: Dict[str, str] = {}
 
-    while offset < len(data):
-        if offset + 8 > len(data):
-            break
-
-        chunk_type, chunk_hdr_size, chunk_sz = struct.unpack("<HHI", data[offset:offset + 8])
+    while offset + 8 <= len(data):
+        chunk_type, _, chunk_sz = struct.unpack("<HHI", data[offset:offset + 8])
         if chunk_sz == 0 or offset + chunk_sz > len(data):
             break
-
         chunk_data = data[offset:offset + chunk_sz]
 
         if chunk_type == 0x0001:  # RES_STRING_POOL_TYPE
             if len(chunk_data) >= 28:
-                string_count, style_count, flags, str_offset, _ = struct.unpack("<IIIII", chunk_data[8:28])
+                string_count, _, flags, str_offset, _ = struct.unpack("<IIIII", chunk_data[8:28])
                 is_utf8 = bool(flags & (1 << 8))
 
                 offset_table_end = 28 + string_count * 4
@@ -90,23 +85,33 @@ def decode_axml(data: bytes) -> str:
                 prefix = strings[prefix_idx] if 0 <= prefix_idx < len(strings) else ""
                 uri = strings[uri_idx] if 0 <= uri_idx < len(strings) else ""
                 if prefix and uri:
-                    namespaces[prefix] = uri
-                    pending_namespaces.append((prefix, uri))
+                    all_namespaces[prefix] = uri
 
-        elif chunk_type == 0x0101:  # RES_XML_END_NAMESPACE_TYPE
-            pass
+        offset += chunk_sz
 
-        elif chunk_type == 0x0102:  # RES_XML_START_ELEMENT_TYPE
+    # Pass 2: Dekode elemen dan atribut XML
+    offset = header_size
+    xml_lines: List[str] = ['<?xml version="1.0" encoding="utf-8"?>']
+    indent = 0
+    root_emitted = False
+
+    while offset + 8 <= len(data):
+        chunk_type, _, chunk_sz = struct.unpack("<HHI", data[offset:offset + 8])
+        if chunk_sz == 0 or offset + chunk_sz > len(data):
+            break
+        chunk_data = data[offset:offset + chunk_sz]
+
+        if chunk_type == 0x0102:  # RES_XML_START_ELEMENT_TYPE
             if len(chunk_data) >= 30:
-                ns_idx, name_idx, attr_start, attr_size, attr_count = struct.unpack("<IIHHH", chunk_data[16:30])
+                _, name_idx, _, _, attr_count = struct.unpack("<IIHHH", chunk_data[16:30])
                 elem_name = strings[name_idx] if 0 <= name_idx < len(strings) else "tag"
 
                 attrs = []
-                if pending_namespaces:
-                    for pfx, uri in pending_namespaces:
+                # Hoist seluruh namespace unik ke root element
+                if not root_emitted:
+                    for pfx, uri in sorted(all_namespaces.items()):
                         attrs.append(f'xmlns:{pfx}="{uri}"')
-                        declared_namespaces.add(pfx)
-                    pending_namespaces.clear()
+                    root_emitted = True
 
                 attr_offset = 36
                 for _ in range(attr_count):
@@ -119,16 +124,10 @@ def decode_axml(data: bytes) -> str:
                     ns_prefix = ""
                     if 0 <= a_ns < len(strings):
                         ns_uri = strings[a_ns]
-                        for p, u in namespaces.items():
+                        for p, u in all_namespaces.items():
                             if u == ns_uri:
                                 ns_prefix = f"{p}:"
                                 break
-
-                    if ns_prefix:
-                        pfx = ns_prefix.rstrip(":")
-                        if pfx not in declared_namespaces and pfx in namespaces:
-                            attrs.append(f'xmlns:{pfx}="{namespaces[pfx]}"')
-                            declared_namespaces.add(pfx)
 
                     val = ""
                     type_code = a_type >> 24
@@ -161,22 +160,25 @@ def decode_axml(data: bytes) -> str:
                     attrs.append(f'{ns_prefix}{name}="{val_escaped}"')
 
                 attr_str = (" " + " ".join(attrs)) if attrs else ""
-                xml_lines.append(f"{'  ' * indent}<{elem_name}{attr_str}>")
+                spaces = "  " * indent
+                xml_lines.append(f"{spaces}<{elem_name}{attr_str}>")
                 indent += 1
 
         elif chunk_type == 0x0103:  # RES_XML_END_ELEMENT_TYPE
             indent = max(0, indent - 1)
             if len(chunk_data) >= 24:
-                ns_idx, name_idx = struct.unpack("<II", chunk_data[16:24])
+                _, name_idx = struct.unpack("<II", chunk_data[16:24])
                 elem_name = strings[name_idx] if 0 <= name_idx < len(strings) else "tag"
-                xml_lines.append(f"{'  ' * indent}</{elem_name}>")
+                spaces = "  " * indent
+                xml_lines.append(f"{spaces}</{elem_name}>")
 
         elif chunk_type == 0x0104:  # RES_XML_CDATA_TYPE
             if len(chunk_data) >= 20:
                 data_idx = struct.unpack("<I", chunk_data[16:20])[0]
                 cdata_str = strings[data_idx] if 0 <= data_idx < len(strings) else ""
                 if cdata_str.strip():
-                    xml_lines.append(f"{'  ' * indent}{cdata_str.strip()}")
+                    spaces = "  " * indent
+                    xml_lines.append(f"{spaces}{cdata_str.strip()}")
 
         offset += chunk_sz
 

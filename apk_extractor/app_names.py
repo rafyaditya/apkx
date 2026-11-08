@@ -433,7 +433,7 @@ def fetch_launcher_activities(adb: ADBManager, device_id: Optional[str] = None) 
     ])
 
     try:
-        res = adb.is_installed()  # pastikan adb aman
+        adb.is_installed()  # pastikan adb aman
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
         if proc.returncode == 0:
             for line in proc.stdout.splitlines():

@@ -5,13 +5,12 @@ Checks for new versions on GitHub and performs automatic self-updates.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 import urllib.request
 import urllib.error
 

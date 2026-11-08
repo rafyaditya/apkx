@@ -1,7 +1,7 @@
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional
 
 # Pastikan output stream dan console di Windows menggunakan UTF-8
 if sys.platform == "win32":
@@ -40,7 +40,6 @@ from apk_extractor.ui import (
     console,
     console_err,
     print_banner,
-    select_device,
     select_devices,
     select_package_interactive,
     show_app_info,

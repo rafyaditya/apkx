@@ -531,7 +531,7 @@ class ADBManager:
         cmd.extend(["pull", remote_path, local_path])
 
         try:
-            res = subprocess.run(
+            subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -747,11 +747,34 @@ class ADBManager:
         elif act_clean == "text":
             if text is None:
                 return False
-            safe_text = text.replace("\\", "\\\\")
-            safe_text = safe_text.replace(" ", "%s")
-            for ch in ('"', "'", "&", "|", ";", "$", "`", "<", ">", "(", ")"):
-                safe_text = safe_text.replace(ch, f"\\{ch}")
-            cmd.extend(["input", "text", safe_text])
+            # Jika teks memiliki newline, kirim per baris dengan keyevent 66 (Enter)
+            lines = text.split("\n")
+            success = True
+            for i, line in enumerate(lines):
+                if line:
+                    safe_text = line.replace("\\", "\\\\")
+                    safe_text = safe_text.replace(" ", "%s")
+                    for ch in (
+                        '"', "'", "&", "|", ";", "$", "`", "<", ">",
+                        "(", ")", "*", "?", "[", "]", "{", "}", "~", "#", "!"
+                    ):
+                        safe_text = safe_text.replace(ch, f"\\{ch}")
+                    sub_cmd = self._build_base_cmd(device_id)
+                    sub_cmd.extend(["shell", "input", "text", safe_text])
+                    try:
+                        p = subprocess.run(sub_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8, check=False)
+                        if p.returncode != 0:
+                            success = False
+                    except Exception:
+                        success = False
+                if i < len(lines) - 1:
+                    enter_cmd = self._build_base_cmd(device_id)
+                    enter_cmd.extend(["shell", "input", "keyevent", "66"])
+                    try:
+                        subprocess.run(enter_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, check=False)
+                    except Exception:
+                        pass
+            return success
         elif act_clean == "swipe":
             if not swipe_coords or len(swipe_coords) < 4:
                 return False

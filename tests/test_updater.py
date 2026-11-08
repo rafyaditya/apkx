@@ -7,7 +7,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
-from apk_extractor import updater
 from apk_extractor.updater import (
     CURRENT_VERSION,
     parse_semver,
