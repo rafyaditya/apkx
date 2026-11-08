@@ -159,7 +159,7 @@ def main(
     show_devices: bool = typer.Option(
         False,
         "--devices",
-        help="Tampilkan daftar perangkat Android yang terhubung ke komputer",
+        help="Tampilkan daftar perangkat Android yang terhubung ke komputer (menghasilkan array JSON List[DeviceInfo] atau [] jika dipadukan dengan --json)",
     ),
     apk_only: bool = typer.Option(
         False,

@@ -335,12 +335,85 @@ class APKPackager:
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> Path:
         """
-        Membongkar isi file .apk atau .apks ke dalam target_dir.
+        Membongkar isi file .apk atau .apks ke dalam target_dir secara atomik.
         - Jika .apk: langsung diekstrak secara aman.
         - Jika .apks: mengekstrak seluruh pecahan APK, di mana tiap split dibongkar ke subfolder.
+        Menerapkan Atomic Staging Pattern: target_dir tidak disentuh sebelum ekstraksi sukses 100%.
         """
-        # Bersihkan file dan subfolder lama di target_dir agar tidak mencampur versi lama
-        if target_dir.exists():
+        archive_path = Path(archive_path)
+        target_dir = Path(target_dir)
+
+        # 1. Validasi ekstensi yang didukung (.apk, .apks)
+        ext = archive_path.suffix.lower()
+        if ext not in (".apk", ".apks"):
+            raise ValueError(
+                f"Format arsip tidak didukung: '{archive_path.suffix}'. Hanya format .apk dan .apks yang diizinkan."
+            )
+
+        # 2. Validasi berkas fisik dan validitas ZIP sebelum menyentuh target_dir
+        if not archive_path.is_file():
+            raise FileNotFoundError(f"Berkas arsip tidak ditemukan: {archive_path}")
+
+        if not zipfile.is_zipfile(archive_path):
+            raise zipfile.BadZipFile(f"Berkas bukan arsip ZIP valid: {archive_path}")
+
+        # 3. Ekstrak konten ke temporary staging directory
+        staging_dir = Path(tempfile.mkdtemp(prefix="apkx_stage_unpack_"))
+        try:
+            if ext == ".apk":
+                # Ekstrak langsung file APK tunggal ke staging_dir
+                with zipfile.ZipFile(archive_path, "r") as zf:
+                    safe_extract_zip(
+                        zf,
+                        staging_dir,
+                        progress_callback=progress_callback,
+                        task_label=f"Mengekstrak {archive_path.name}",
+                    )
+
+            elif ext == ".apks":
+                # Ekstrak paket APKS ke temporary split staging
+                temp_split_dir = Path(tempfile.mkdtemp(prefix="apkx_unpack_apks_"))
+                try:
+                    with zipfile.ZipFile(archive_path, "r") as bundle_zf:
+                        safe_extract_zip(
+                            bundle_zf,
+                            temp_split_dir,
+                            progress_callback=progress_callback,
+                            task_label="Membuka bundle APKS",
+                        )
+
+                    split_files = sorted(list(temp_split_dir.glob("*.apk")))
+                    if not split_files:
+                        raise ValueError(f"Berkas bundle .apks '{archive_path.name}' tidak memuat berkas .apk di dalamnya.")
+
+                    total_splits = len(split_files)
+                    for split_idx, split_file in enumerate(split_files, start=1):
+                        subfolder_name = split_file.stem
+                        sub_out_dir = staging_dir / subfolder_name
+                        sub_out_dir.mkdir(parents=True, exist_ok=True)
+                        if progress_callback:
+                            progress_callback(
+                                f"Mengekstrak split ({split_idx}/{total_splits}): {split_file.name}",
+                                split_idx,
+                                total_splits,
+                            )
+                        with zipfile.ZipFile(split_file, "r") as split_zf:
+                            safe_extract_zip(
+                                split_zf,
+                                sub_out_dir,
+                                progress_callback=progress_callback,
+                                task_label=f"Mengekstrak {split_file.stem}",
+                            )
+                finally:
+                    if temp_split_dir.exists():
+                        shutil.rmtree(temp_split_dir, ignore_errors=True)
+
+            # Otomatis decode AndroidManifest.xml biner ke teks XML terbaca di staging
+            self.decode_manifest_files(staging_dir)
+
+            # 4. Hanya jika seluruh proses ekstraksi di staging sukses 100%,
+            # bersihkan target_dir dan pindahkan file dari staging ke target_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
             for item in target_dir.iterdir():
                 try:
                     if item.is_dir():
@@ -349,55 +422,15 @@ class APKPackager:
                         item.unlink(missing_ok=True)
                 except Exception:
                     pass
-        target_dir.mkdir(parents=True, exist_ok=True)
 
-        if archive_path.suffix.lower() == ".apk":
-            # Ekstrak langsung file APK tunggal
-            with zipfile.ZipFile(archive_path, "r") as zf:
-                safe_extract_zip(
-                    zf,
-                    target_dir,
-                    progress_callback=progress_callback,
-                    task_label=f"Mengekstrak {archive_path.name}",
-                )
+            for item in staging_dir.iterdir():
+                dest = target_dir / item.name
+                shutil.move(str(item), str(dest))
 
-        elif archive_path.suffix.lower() == ".apks":
-            # Ekstrak paket APKS ke temporary
-            temp_split_dir = Path(tempfile.mkdtemp(prefix="apkx_unpack_apks_"))
-            try:
-                with zipfile.ZipFile(archive_path, "r") as bundle_zf:
-                    safe_extract_zip(
-                        bundle_zf,
-                        temp_split_dir,
-                        progress_callback=progress_callback,
-                        task_label="Membuka bundle APKS",
-                    )
-
-                split_files = sorted(list(temp_split_dir.glob("*.apk")))
-                total_splits = len(split_files)
-                for split_idx, split_file in enumerate(split_files, start=1):
-                    subfolder_name = split_file.stem
-                    sub_out_dir = target_dir / subfolder_name
-                    sub_out_dir.mkdir(parents=True, exist_ok=True)
-                    if progress_callback:
-                        progress_callback(
-                            f"Mengekstrak split ({split_idx}/{total_splits}): {split_file.name}",
-                            split_idx,
-                            total_splits,
-                        )
-                    with zipfile.ZipFile(split_file, "r") as split_zf:
-                        safe_extract_zip(
-                            split_zf,
-                            sub_out_dir,
-                            progress_callback=progress_callback,
-                            task_label=f"Mengekstrak {split_file.stem}",
-                        )
-            finally:
-                if temp_split_dir.exists():
-                    shutil.rmtree(temp_split_dir, ignore_errors=True)
-
-        # Otomatis decode AndroidManifest.xml biner ke teks XML terbaca
-        self.decode_manifest_files(target_dir)
+        finally:
+            # 5. Selalu bersihkan staging directory
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
 
         return target_dir
 

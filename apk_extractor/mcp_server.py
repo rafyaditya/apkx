@@ -181,7 +181,7 @@ def create_mcp_server() -> Any:
         app_extracted_folder = extracted_dir / app_folder_name
         try:
             packager.unpack(extract_res.output_path, app_extracted_folder)
-        except (zipfile.BadZipFile, OSError, Exception) as e:
+        except (zipfile.BadZipFile, OSError, ValueError) as e:
             return {
                 "status": "error",
                 "message": f"Gagal mengekstrak APK: Berkas arsip rusak atau tidak lengkap ({e}).",

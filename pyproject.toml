@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apkx"
-version = "1.4.1"
+version = "1.4.2"
 description = "AI-Native Android Reverse Engineering, Exploration & Blueprint Engine"
 readme = "README.md"
 authors = [{ name = "Developer" }]
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",

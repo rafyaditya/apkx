@@ -180,7 +180,7 @@ class ADBManager:
                 check=False,
             )
             if res.returncode == 0:
-                lines = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
+                lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
                 if len(lines) >= 1 and lines[0]:
                     info["brand"] = lines[0].capitalize()
                 if len(lines) >= 2 and lines[1]:
@@ -747,12 +747,16 @@ class ADBManager:
         elif act_clean == "text":
             if text is None:
                 return False
+            # Normalisasi \r\n dan \r ke \n
+            normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
             # Jika teks memiliki newline, kirim per baris dengan keyevent 66 (Enter)
-            lines = text.split("\n")
+            lines = normalized_text.split("\n")
             success = True
             for i, line in enumerate(lines):
                 if line:
                     safe_text = line.replace("\\", "\\\\")
+                    # Escaping % literal agar tidak bentrok dengan representasi spasi %s di shell/Android
+                    safe_text = safe_text.replace("%", "\\%")
                     safe_text = safe_text.replace(" ", "%s")
                     for ch in (
                         '"', "'", "&", "|", ";", "$", "`", "<", ">",
@@ -771,9 +775,11 @@ class ADBManager:
                     enter_cmd = self._build_base_cmd(device_id)
                     enter_cmd.extend(["shell", "input", "keyevent", "66"])
                     try:
-                        subprocess.run(enter_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, check=False)
+                        p_enter = subprocess.run(enter_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, check=False)
+                        if p_enter.returncode != 0:
+                            success = False
                     except Exception:
-                        pass
+                        success = False
             return success
         elif act_clean == "swipe":
             if not swipe_coords or len(swipe_coords) < 4:
@@ -980,7 +986,7 @@ class ADBManager:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8, check=False)
             lines = res.stdout.strip().splitlines()
             selected = lines[-tail:] if len(lines) > tail else lines
-            has_crash = any("FATAL EXCEPTION" in l or "AndroidRuntime" in l or "Exception" in l for l in selected)
+            has_crash = any("FATAL EXCEPTION" in line or "AndroidRuntime" in line or "Exception" in line for line in selected)
             return {
                 "package_name": package_name,
                 "pid": int(pid) if pid else None,

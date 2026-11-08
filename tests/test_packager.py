@@ -168,6 +168,57 @@ class TestAPKPackager(unittest.TestCase):
         self.assertTrue((target_dir / "classes.dex").exists(), "New unpacked file should exist")
         self.assertEqual((target_dir / "classes.dex").read_bytes(), b"new dex data")
 
+    def test_unpack_corrupt_archive_preserves_existing_target(self):
+        target_dir = self.temp_out_dir / "preserve_existing_target"
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        important_file = target_dir / "important_data.txt"
+        important_file.write_text("precious existing data", encoding="utf-8")
+        important_sub = target_dir / "existing_subdir"
+        important_sub.mkdir()
+        (important_sub / "nested.txt").write_text("nested data", encoding="utf-8")
+
+        # 1. Unpack corrupt .apk (invalid zip) -> should raise BadZipFile and preserve target_dir
+        corrupt_apk = self.temp_out_dir / "corrupted.apk"
+        corrupt_apk.write_bytes(b"PK\x03\x04corrupted-archive-garbage-content")
+
+        with self.assertRaises(zipfile.BadZipFile):
+            self.packager.unpack(corrupt_apk, target_dir)
+
+        self.assertTrue(important_file.exists(), "File must not be deleted if unpack fails")
+        self.assertEqual(important_file.read_text(encoding="utf-8"), "precious existing data")
+        self.assertTrue((important_sub / "nested.txt").exists(), "Subdirectory must remain untouched")
+
+        # 2. Unpack unsupported archive extension (.zip) -> should raise ValueError and preserve target_dir
+        unsupported_zip = self.temp_out_dir / "unsupported.zip"
+        with zipfile.ZipFile(unsupported_zip, "w") as zf:
+            zf.writestr("test.txt", "dummy content")
+
+        with self.assertRaises(ValueError):
+            self.packager.unpack(unsupported_zip, target_dir)
+
+        self.assertTrue(important_file.exists())
+        self.assertTrue((important_sub / "nested.txt").exists())
+
+        # 3. Unpack non-existent archive -> should raise FileNotFoundError and preserve target_dir
+        non_existent = self.temp_out_dir / "non_existent.apk"
+        with self.assertRaises(FileNotFoundError):
+            self.packager.unpack(non_existent, target_dir)
+
+        self.assertTrue(important_file.exists())
+        self.assertTrue((important_sub / "nested.txt").exists())
+
+        # 4. Unpack empty .apks bundle (no .apk inside) -> should raise ValueError and preserve target_dir
+        empty_apks = self.temp_out_dir / "empty_bundle.apks"
+        with zipfile.ZipFile(empty_apks, "w") as zf:
+            zf.writestr("not_an_apk.txt", "nothing")
+
+        with self.assertRaises(ValueError):
+            self.packager.unpack(empty_apks, target_dir)
+
+        self.assertTrue(important_file.exists())
+        self.assertTrue((important_sub / "nested.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

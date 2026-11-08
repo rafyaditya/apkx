@@ -471,6 +471,27 @@ class TestADBManager(unittest.TestCase):
         self.assertIn("66", second_call_cmd)
         self.assertIn("Line2", third_call_cmd)
 
+        # Test CRLF normalization and % literal escaping
+        mock_run.reset_mock()
+        ok_crlf = manager.input_interact("text", text="Discount 50%\r\nPromo 100%")
+        self.assertTrue(ok_crlf)
+        self.assertEqual(mock_run.call_count, 3)
+        crlf_call1 = mock_run.call_args_list[0][0][0]
+        crlf_call2 = mock_run.call_args_list[1][0][0]
+        crlf_call3 = mock_run.call_args_list[2][0][0]
+        # Space converted to %s and literal % escaped as \%
+        self.assertIn("Discount%s50\\%", crlf_call1[4])
+        self.assertIn("66", crlf_call2)
+        self.assertIn("Promo%s100\\%", crlf_call3[4])
+
+        # Test keyevent 66 failure returns False
+        mock_run.reset_mock()
+        mock_fail = MagicMock()
+        mock_fail.returncode = 1
+        mock_run.side_effect = [mock_proc, mock_fail, mock_proc]
+        ok_fail = manager.input_interact("text", text="LineA\nLineB")
+        self.assertFalse(ok_fail)
+
 
 if __name__ == "__main__":
     unittest.main()
