@@ -4,7 +4,7 @@ Decodes compiled AndroidManifest.xml and layout binary XML files into human-read
 """
 
 import struct
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 
 def decode_axml(data: bytes) -> str:
@@ -27,6 +27,8 @@ def decode_axml(data: bytes) -> str:
     offset = header_size
     strings: List[str] = []
     namespaces: Dict[str, str] = {}
+    pending_namespaces: List[Tuple[str, str]] = []
+    declared_namespaces: Set[str] = set()
     xml_lines: List[str] = ['<?xml version="1.0" encoding="utf-8"?>']
     indent = 0
 
@@ -89,6 +91,10 @@ def decode_axml(data: bytes) -> str:
                 uri = strings[uri_idx] if 0 <= uri_idx < len(strings) else ""
                 if prefix and uri:
                     namespaces[prefix] = uri
+                    pending_namespaces.append((prefix, uri))
+
+        elif chunk_type == 0x0101:  # RES_XML_END_NAMESPACE_TYPE
+            pass
 
         elif chunk_type == 0x0102:  # RES_XML_START_ELEMENT_TYPE
             if len(chunk_data) >= 30:
@@ -96,9 +102,11 @@ def decode_axml(data: bytes) -> str:
                 elem_name = strings[name_idx] if 0 <= name_idx < len(strings) else "tag"
 
                 attrs = []
-                if indent == 0 and namespaces:
-                    for pfx, uri in sorted(namespaces.items()):
+                if pending_namespaces:
+                    for pfx, uri in pending_namespaces:
                         attrs.append(f'xmlns:{pfx}="{uri}"')
+                        declared_namespaces.add(pfx)
+                    pending_namespaces.clear()
 
                 attr_offset = 36
                 for _ in range(attr_count):
@@ -115,6 +123,12 @@ def decode_axml(data: bytes) -> str:
                             if u == ns_uri:
                                 ns_prefix = f"{p}:"
                                 break
+
+                    if ns_prefix:
+                        pfx = ns_prefix.rstrip(":")
+                        if pfx not in declared_namespaces and pfx in namespaces:
+                            attrs.append(f'xmlns:{pfx}="{namespaces[pfx]}"')
+                            declared_namespaces.add(pfx)
 
                     val = ""
                     type_code = a_type >> 24

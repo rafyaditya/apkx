@@ -15,11 +15,11 @@ except ImportError:
     except ImportError:
         MCPServer = None
 
-from apk_extractor.adb import ADBManager
+from apk_extractor.adb import ADBError, ADBManager
 from apk_extractor.app_names import resolve_apps
 from apk_extractor.axml import decode_axml
 from apk_extractor.dex import extract_class_skeleton_from_dir, format_skeleton_text
-from apk_extractor.endpoints import extract_endpoints_from_dir
+from apk_extractor.endpoints import extract_endpoints_from_dir, extract_endpoints_from_file
 from apk_extractor.jadx import JADXManager
 from apk_extractor.packager import APKPackager, extract_sqlite_schema_from_dir, sanitize_filename
 
@@ -45,9 +45,30 @@ def create_mcp_server() -> Any:
         Lists all connected Android devices with their Serial ID, brand, model, Android OS version,
         and authorization status. Includes pre-flight troubleshooting guidance if no devices are detected or unauthorized.
         """
-        adb.ensure_installed()
+        if not adb.ensure_installed():
+            return {
+                "status": "not_ready",
+                "code": "adb_not_found",
+                "total_devices": 0,
+                "devices": [],
+                "message": "ADB tidak ditemukan di sistem. Harap instal Android platform-tools.",
+                "troubleshooting": [
+                    "Linux: sudo apt install adb",
+                    "macOS: brew install android-platform-tools",
+                    "Windows: choco install adb atau unduh Android SDK Platform-Tools",
+                ],
+            }
+
         ready, code, detail = adb.check_device_ready()
-        devices = adb.get_devices_with_details()
+        try:
+            devices = adb.get_devices_with_details()
+        except ADBError as e:
+            devices = []
+            if ready:
+                ready = False
+                code = "adb_error"
+                detail = {"message": f"Gagal membaca perangkat ADB: {e}", "troubleshooting": []}
+
         return {
             "status": "ready" if ready else "not_ready",
             "code": code,
@@ -78,7 +99,7 @@ def create_mcp_server() -> Any:
         packages = adb.list_packages(
             device_id=device_id,
             third_party_only=not include_system_apps,
-            system_only=include_system_apps,
+            system_only=False,
         )
         apps = resolve_apps(adb, packages, device_id=device_id)
         return [{"app_name": a.app_name, "package_name": a.package_name} for a in apps]
@@ -243,7 +264,9 @@ def create_mcp_server() -> Any:
                 except Exception:
                     pass
             return extract_endpoints_from_dir(p)
-        return {"error": f"Path '{target_path}' bukan direktori yang valid."}
+        elif p.is_file():
+            return extract_endpoints_from_file(p)
+        return {"error": f"Path '{target_path}' tidak ditemukan atau bukan berkas/direktori valid."}
 
     @server.tool()
     def apkx_get_class_skeleton(target_path: str, target_package: Optional[str] = None) -> str:

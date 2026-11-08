@@ -7,7 +7,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from apk_extractor.adb import ADBManager
 from apk_extractor.app_names import extract_apk_label, save_to_app_cache
@@ -473,6 +473,23 @@ class APKPackager:
         Menghasilkan ringkasan analisis teknologi, dekode manifest, ekstraksi endpoint,
         dan menulis file catatan di folder ekstraksi.
         """
+        # Bersihkan artefak analisis usang jika ada sebelumnya
+        for artifact_name in (
+            "endpoints.json",
+            "class_skeleton.json",
+            "class_skeleton.txt",
+            "sqlite_schema.json",
+            "sqlite_schema.sql",
+            "analysis_info.json",
+            "README.txt",
+        ):
+            stale_file = extracted_dir / artifact_name
+            if stale_file.is_file():
+                try:
+                    stale_file.unlink()
+                except Exception:
+                    pass
+
         fw_info = self.detect_framework(extracted_dir)
 
         # 1. Pastikan Manifest terbaca

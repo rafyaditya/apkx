@@ -25,6 +25,7 @@ if sys.platform == "win32":
         pass
 
 import json
+import zipfile
 import questionary
 import typer
 from rich.panel import Panel
@@ -269,10 +270,12 @@ def main(
         try:
             from apk_extractor.mcp_server import run_mcp_server
             run_mcp_server()
-            raise typer.Exit(code=0)
+        except typer.Exit:
+            raise
         except Exception as e:
             show_error(f"Gagal menjalankan server MCP: {e}")
             raise typer.Exit(code=1)
+        raise typer.Exit(code=0)
 
     # Mode Auto-Setup MCP ke AI Coding Agents (apkx setup / apkx setup-mcp)
     if query in ("setup", "setup-mcp", "mcp-setup"):
@@ -347,7 +350,7 @@ def main(
     # 1.6 Sub-perintah Screenshot (apkx screenshot [-o screen.png] [-d id])
     if query in ("screenshot", "screencap", "capture"):
         out_target = output_dir
-        if out_target.is_dir() or str(out_target) in (".", "./output"):
+        if out_target.is_dir() or str(out_target) in (".", "output", "./output") or not out_target.suffix:
             out_target = out_target / "screen.png"
         out_target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -881,16 +884,23 @@ def process_single_device(
         # 7. Bongkar isi APK jika dipilih
         if selected_action in ("extract_only", "both"):
             app_extracted_folder = extracted_dir / app_folder_name
-            with active_console.status(f"[bold cyan][3/4] Mengekstrak isi APK ke {app_folder_name}...[/bold cyan]") as unpack_status:
-                def update_unpack_progress(msg: str, current: int, total: int):
-                    if hasattr(unpack_status, "update"):
-                        unpack_status.update(f"[bold cyan][3/4] {msg}[/bold cyan]")
+            try:
+                with active_console.status(f"[bold cyan][3/4] Mengekstrak isi APK ke {app_folder_name}...[/bold cyan]") as unpack_status:
+                    def update_unpack_progress(msg: str, current: int, total: int):
+                        if hasattr(unpack_status, "update"):
+                            unpack_status.update(f"[bold cyan][3/4] {msg}[/bold cyan]")
 
-                packager.unpack(
-                    extract_res.output_path,
-                    app_extracted_folder,
-                    progress_callback=update_unpack_progress,
-                )
+                    packager.unpack(
+                        extract_res.output_path,
+                        app_extracted_folder,
+                        progress_callback=update_unpack_progress,
+                    )
+            except zipfile.BadZipFile as e:
+                show_error(f"Gagal membongkar APK: Berkas arsip rusak atau bukan format zip valid ({e})")
+                raise typer.Exit(code=1)
+            except Exception as e:
+                show_error(f"Gagal membongkar APK: {e}")
+                raise typer.Exit(code=1)
 
             if not as_json:
                 console.print(f"[bold green][V][/bold green] Berhasil membongkar berkas APK ke [cyan]{app_extracted_folder.name}[/cyan]")

@@ -318,5 +318,44 @@ class TestMCPServer(unittest.TestCase):
         asyncio.run(run_call())
 
 
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=False)
+    def test_list_devices_adb_missing(self, mock_ensured):
+        async def run_call():
+            res = await self.server.call_tool("apkx_list_devices", {})
+            self.assertIn("adb_not_found", str(res))
+            self.assertIn("not_ready", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=["com.android.settings", "com.whatsapp"])
+    @patch("apk_extractor.app_names.resolve_apps")
+    def test_list_apps_include_system_flag(self, mock_resolve, mock_list_pkgs, mock_ready, mock_ensured):
+        mock_resolve.return_value = []
+        async def run_call():
+            await self.server.call_tool("apkx_list_apps", {"include_system_apps": True})
+            mock_list_pkgs.assert_called_with(
+                device_id=None,
+                third_party_only=False,
+                system_only=False,
+            )
+
+        asyncio.run(run_call())
+
+    def test_get_endpoints_from_apk_file(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmp_d:
+            apk_path = Path(tmp_d) / "sample.apk"
+            with zipfile.ZipFile(apk_path, "w") as zf:
+                zf.writestr("classes.dex", b"data with https://api.sample.com/v1/auth endpoint")
+
+            async def run_call():
+                res = await self.server.call_tool("apkx_get_endpoints", {"target_path": str(apk_path)})
+                self.assertIn("api.sample.com", str(res))
+
+            asyncio.run(run_call())
+
+
 if __name__ == "__main__":
     unittest.main()

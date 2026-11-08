@@ -3,6 +3,7 @@ apkx: Zero-Config Headless JADX Integration.
 Manages automatic detection, downloading, and execution of JADX (Dex-to-Java Decompiler).
 """
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from typing import Callable, Optional
 
 JADX_VERSION = "1.5.6"
 JADX_DOWNLOAD_URL = f"https://github.com/skylot/jadx/releases/download/v{JADX_VERSION}/jadx-{JADX_VERSION}.zip"
+JADX_SHA256 = "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974"
 
 
 class JADXError(Exception):
@@ -122,6 +124,22 @@ class JADXManager:
             with urllib.request.urlopen(req) as resp, open(zip_path, "wb") as out_file:
                 shutil.copyfileobj(resp, out_file)
 
+            # Verifikasi integritas SHA-256
+            if JADX_SHA256:
+                if on_progress:
+                    on_progress("Memverifikasi integritas checksum SHA-256 JADX...")
+                hasher = hashlib.sha256()
+                with open(zip_path, "rb") as f:
+                    while chunk := f.read(65536):
+                        hasher.update(chunk)
+                computed_hash = hasher.hexdigest().lower()
+                if computed_hash != JADX_SHA256.lower():
+                    if on_progress:
+                        on_progress(f"Verifikasi SHA-256 JADX gagal ({computed_hash} != {JADX_SHA256}).")
+                    if zip_path.is_file():
+                        zip_path.unlink()
+                    return False
+
             if on_progress:
                 on_progress("Mengekstrak JADX portable...")
 
@@ -199,6 +217,7 @@ class JADXManager:
         target_path: Path,
         output_dir: Path,
         no_res: bool = True,
+        timeout: int = 300,
         on_progress: Optional[Callable[[str], None]] = None,
     ) -> bool:
         """
@@ -223,8 +242,13 @@ class JADXManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 check=False,
+                timeout=timeout,
             )
             return res.returncode == 0 or any(output_dir.glob("**/*.java"))
+        except subprocess.TimeoutExpired:
+            if on_progress:
+                on_progress(f"Waktu habis ({timeout} detik) saat menjalankan dekompilasi JADX.")
+            return False
         except Exception as e:
             if on_progress:
                 on_progress(f"Kesalahan saat menjalankan JADX: {e}")

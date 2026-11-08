@@ -19,13 +19,13 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
      * `[3]` Keduanya (Simpan APK + Ekstrak Isi)
 4. **Struktur Output yang Rapi:**
    * `output/apks/` : Menyimpan file installer `.apk` atau `.apks`.
-   * `output/extracted/<Nama_App>/` : Menyimpan seluruh berkas bongkaran (`classes.dex`, `AndroidManifest.xml`, `assets/`, `res/`, `lib/`).
+   * `output/extracted/<Nama_App>/` : Menyimpan seluruh berkas bongkaran (`classes.dex`, `AndroidManifest.xml`, `assets/`, `res/`, `lib/`). Untuk Split APKs (`.apks`), pecahan diekstrak rapi ke subfolder (`base/`, `split_config.<arch>/`, dll.) dengan artefak analisis terintegrasi.
 5. **Smart Framework Detection:**
    * Otomatis mendeteksi apakah aplikasi dibangun dengan **Flutter**, **React Native**, **Unity**, atau **Native Android**, dan menunjukkan lokasi file kode utamanya.
 6. **Pure-Python Manifest & Endpoint Extractor:**
-   * Mendekode binary `AndroidManifest.xml` menjadi teks XML terbaca tanpa AAPT/Java (`AndroidManifest_readable.xml`), serta memindai seluruh URL backend, domain, dan REST/GraphQL API ke `endpoints.json`.
-7. **Fast DEX Class Skeleton Parser (<50ms):**
-   * Membaca struktur paket dan kelas aplikasi tanpa pembengkakan token AI ke `class_skeleton.txt`.
+   * Mendekode binary `AndroidManifest.xml` menjadi teks XML valid tanpa AAPT/Java (`AndroidManifest_readable.xml`), menangani namespace bersarang, serta memindai seluruh URL backend, domain, dan REST/GraphQL API ke `endpoints.json`.
+7. **Fast Pure-Python DEX Class Skeleton Parser:**
+   * Membaca struktur paket dan kelas aplikasi tanpa Java (hanya puluhan hingga ratusan ms pada multi-DEX) tanpa pembengkakan token AI ke `class_skeleton.txt`.
 8. **Ekstraksi Skema SQLite dari Biner Native (`libapp.so` / DEX):**
    * Memindai definisi tabel (`CREATE TABLE`), nama kolom, dan relasi database langsung dari file biner terkompilasi Flutter AOT (`libapp.so`) maupun bytecode Android DEX ke `sqlite_schema.sql` dan `sqlite_schema.json`.
 9. **Headless On-Demand JADX Decompiler:**
@@ -44,7 +44,7 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
 ## Prasyarat Sistem
 
 1. **Python**:
-   * Python versi **3.8 atau yang lebih baru** (disarankan **3.10+**).
+   * Python versi **3.10 atau yang lebih baru** (mendukung Python 3.10, 3.11, 3.12, 3.13, 3.14).
    * Pada Windows, pastikan opsi *"Add python.exe to PATH"* dicentang saat instalasi Python.
 2. **Git**:
    * Git terpasang di sistem untuk mengambil repositori dan menjalankan fitur `apkx update`.
@@ -54,7 +54,9 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
    * *Cara cek di terminal:* `java -version`.
 4. **ADB (Android Debug Bridge)** *(Otomatis / Zero-Config)*:
    * Jika ADB sudah terpasang di sistem Anda, `apkx` akan otomatis menggunakannya. Jika belum ada, `apkx` akan otomatis mengunduh binary resmi dari Google tanpa konfigurasi manual.
-5. **Koneksi Internet**:
+5. **AAPT / AAPT2** *(Opsional)*:
+   * `apkx` menggunakan heuristik cerdas (termasuk Android `dumpsys`, cache codename internal, dan `aapt`/`aapt2` jika tersedia di PATH) untuk menampilkan nama ramah aplikasi (seperti "WhatsApp" alih-alih `com.whatsapp`). Jika `aapt` terpasang, resolusi nama dari resource string APK akan semakin lengkap.
+6. **Koneksi Internet**:
    * Diperlukan saat instalasi pertama kali, pengunduhan binary ADB/JADX otomatis, serta saat menjalankan pembaruan `apkx update`.
 
 ---
@@ -151,7 +153,7 @@ apkx whatsapp -x
 # Simpan APK sekaligus ekstrak isinya secara eksplisit:
 apkx whatsapp -b
 ```
-Opsi ini melewati dialog pemilihan tindakan sehingga proses berlangsung otomatis dan cepat.
+Opsi ini melewati dialog pemilihan tindakan sehingga proses berlangsung otomatis dan cepat. Pada eksekusi langsung via CLI (misal: `apkx whatsapp`), `apkx` secara default menjalankan mode `--both` (simpan installer APK sekaligus ekstrak isinya) kecuali jika `-k` (`--apk-only`) atau `-x` (`--extract-only`) ditentukan.
 
 ### 9. Audit & Informasi Teknis Aplikasi (--info / --analyze)
 ```powershell

@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -276,6 +277,30 @@ class TestCLISubcommands(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         data = json.loads(result.output)
         self.assertEqual(data["status"], "ready")
+
+
+    @patch("apk_extractor.adb.ADBManager.is_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "DEV1"}))
+    @patch("apk_extractor.adb.ADBManager.take_screenshot")
+    @patch("apk_extractor.adb.ADBManager.get_screen_size", return_value=(1080, 2400))
+    def test_cli_screenshot_default_path(self, mock_size, mock_take, mock_ready, mock_inst):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            target_out = Path(tmp_d) / "screenshots"
+            def fake_take(out_path, device_id=None):
+                out_path.write_bytes(b"fake_png_data")
+                return True
+            mock_take.side_effect = fake_take
+            result = self.runner.invoke(app, ["screenshot", "-o", str(target_out), "--json"])
+            self.assertEqual(result.exit_code, 0)
+            data = json.loads(result.output)
+            self.assertEqual(data["status"], "success")
+            self.assertTrue(data["path"].endswith("screen.png"))
+
+    @patch("apk_extractor.mcp_server.run_mcp_server")
+    def test_cli_serve_clean_exit(self, mock_run_mcp):
+        mock_run_mcp.return_value = None
+        result = self.runner.invoke(app, ["serve"])
+        self.assertEqual(result.exit_code, 0)
 
 
 if __name__ == "__main__":

@@ -517,7 +517,13 @@ class ADBManager:
 
         return paths
 
-    def pull_file(self, remote_path: str, local_path: str, device_id: Optional[str] = None) -> None:
+    def pull_file(
+        self,
+        remote_path: str,
+        local_path: str,
+        device_id: Optional[str] = None,
+        timeout: int = 180,
+    ) -> None:
         """
         Pulls a remote file from Android device to local filesystem.
         """
@@ -531,7 +537,10 @@ class ADBManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 check=True,
+                timeout=timeout,
             )
+        except subprocess.TimeoutExpired:
+            raise ADBError(f"Waktu habis ({timeout} detik) saat menarik file {remote_path} via ADB.")
         except subprocess.CalledProcessError as e:
             raise ADBError(f"Gagal menarik file {remote_path}: {e.stderr.strip()}")
 
@@ -738,8 +747,11 @@ class ADBManager:
         elif act_clean == "text":
             if text is None:
                 return False
-            escaped = text.replace(" ", "%s").replace("'", "\\'").replace('"', '\\"')
-            cmd.extend(["input", "text", escaped])
+            safe_text = text.replace("\\", "\\\\")
+            safe_text = safe_text.replace(" ", "%s")
+            for ch in ('"', "'", "&", "|", ";", "$", "`", "<", ">", "(", ")"):
+                safe_text = safe_text.replace(ch, f"\\{ch}")
+            cmd.extend(["input", "text", safe_text])
         elif act_clean == "swipe":
             if not swipe_coords or len(swipe_coords) < 4:
                 return False
@@ -949,6 +961,7 @@ class ADBManager:
             return {
                 "package_name": package_name,
                 "pid": int(pid) if pid else None,
+                "scope": "app" if pid else "global (aplikasi belum berjalan atau PID tidak ditemukan)",
                 "has_crash_indicator": has_crash,
                 "total_lines": len(selected),
                 "logs": "\n".join(selected) if selected else "(Tidak ada error logcat terdeteksi)",
@@ -957,6 +970,7 @@ class ADBManager:
             return {
                 "package_name": package_name,
                 "pid": None,
+                "scope": "unknown",
                 "has_crash_indicator": False,
                 "total_lines": 0,
                 "logs": f"Gagal mengambil logcat: {e}",

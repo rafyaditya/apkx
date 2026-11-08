@@ -9,7 +9,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 ANTIGRAVITY_SKILL_NAME = "apkx-android-blueprint"
@@ -48,7 +48,21 @@ Tujuan utama skill ini adalah memandu AI Agent dalam menganalisis berkas APK/APK
 
 
 def load_skill_content() -> str:
-    """Loads skill content from local .agents file if available, or falls back to template."""
+    """Loads skill content from package data, local .agents file if available, or falls back to template."""
+    # 1. Package resources (included in pip/wheel distribution)
+    try:
+        import importlib.resources as pkg_resources
+        data_text = (
+            pkg_resources.files("apk_extractor")
+            .joinpath("data", "skills", ANTIGRAVITY_SKILL_NAME, "SKILL.md")
+            .read_text(encoding="utf-8")
+        )
+        if data_text and len(data_text) > 100:
+            return data_text.strip()
+    except Exception:
+        pass
+
+    # 2. Local development checkout (.agents/)
     local_file = Path(__file__).resolve().parent.parent / ".agents" / "skills" / ANTIGRAVITY_SKILL_NAME / "SKILL.md"
     if local_file.is_file():
         try:
@@ -57,6 +71,8 @@ def load_skill_content() -> str:
                 return content
         except Exception:
             pass
+
+    # 3. Fallback template
     return SKILL_TEMPLATE.strip()
 
 
@@ -179,15 +195,30 @@ def install_mcp_to_all_clients() -> List[Dict[str, str]]:
             data: Dict[str, Any] = {}
             if path.is_file() and path.stat().st_size > 0:
                 try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        data = loaded
+                    else:
+                        raise ValueError("Root configuration is not a JSON object")
                 except Exception:
+                    # Backup berkas konfigurasi yang rusak sebelum ditulis ulang
+                    backup_path = path.with_suffix(path.suffix + ".bak")
+                    try:
+                        shutil.copy2(path, backup_path)
+                    except Exception:
+                        pass
                     data = {}
 
-            if "mcpServers" not in data:
+            if "mcpServers" not in data or not isinstance(data.get("mcpServers"), dict):
                 data["mcpServers"] = {}
 
             data["mcpServers"]["apkx"] = server_entry
-            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            # Atomic write via temporary file
+            content_str = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+            temp_file = path.with_suffix(".tmp")
+            temp_file.write_text(content_str, encoding="utf-8")
+            temp_file.replace(path)
 
             results.append({
                 "client": name,

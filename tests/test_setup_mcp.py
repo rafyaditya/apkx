@@ -51,6 +51,24 @@ class TestSetupMCP(unittest.TestCase):
                 self.assertTrue(expected_skill.exists())
                 self.assertIn("apkx-android-blueprint", expected_skill.read_text(encoding="utf-8"))
 
+    def test_install_mcp_corrupt_json_creates_backup(self):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            fake_conf = Path(tmp_d) / "mcp_config.json"
+            fake_conf.write_text("{ corrupt json: [", encoding="utf-8")
+
+            with patch(
+                "apk_extractor.setup_mcp.get_target_config_paths",
+                return_value=[("Google Antigravity", fake_conf)],
+            ):
+                with patch("apk_extractor.setup_mcp.sync_antigravity_skill", return_value=None):
+                    results = install_mcp_to_all_clients()
+                    self.assertEqual(results[0]["status"], "success")
+                    backup_file = fake_conf.with_suffix(".json.bak")
+                    self.assertTrue(backup_file.is_file(), "Backup file should be created when JSON is corrupt")
+                    self.assertEqual(backup_file.read_text(encoding="utf-8"), "{ corrupt json: [")
+                    data = json.loads(fake_conf.read_text(encoding="utf-8"))
+                    self.assertIn("apkx", data["mcpServers"])
+
 
 if __name__ == "__main__":
     unittest.main()
