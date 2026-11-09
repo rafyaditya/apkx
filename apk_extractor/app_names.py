@@ -287,7 +287,7 @@ def find_aapt_binary() -> Optional[str]:
         found = shutil.which(bin_name)
         if found:
             return found
-        if sys.platform == "win32":
+        if sys.platform == "win32":  # pragma: no cover
             found = shutil.which(f"{bin_name}.exe")
             if found:
                 return found
@@ -299,9 +299,9 @@ def find_aapt_binary() -> Optional[str]:
             candidates.append(Path(val))
 
     home = Path.home()
-    if sys.platform == "win32":
+    if sys.platform == "win32":  # pragma: no cover
         candidates.append(home / "AppData" / "Local" / "Android" / "Sdk")
-    elif sys.platform == "darwin":
+    elif sys.platform == "darwin":  # pragma: no cover
         candidates.append(home / "Library" / "Android" / "sdk")
     else:
         candidates.append(home / "Android" / "Sdk")

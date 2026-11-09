@@ -1,4 +1,7 @@
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from apk_extractor.adb import ADBManager, find_adb_binary
 
@@ -479,10 +482,21 @@ class TestADBManager(unittest.TestCase):
         crlf_call1 = mock_run.call_args_list[0][0][0]
         crlf_call2 = mock_run.call_args_list[1][0][0]
         crlf_call3 = mock_run.call_args_list[2][0][0]
-        # Space converted to %s and literal % escaped as \%
-        self.assertIn("Discount%s50\\%", crlf_call1[4])
+        # Space converted to %s and literal % kept as % (not \%)
+        self.assertIn("Discount%s50%", crlf_call1[4])
         self.assertIn("66", crlf_call2)
-        self.assertIn("Promo%s100\\%", crlf_call3[4])
+        self.assertIn("Promo%s100%", crlf_call3[4])
+
+        # Test chunking of literal %s in raw text
+        mock_run.reset_mock()
+        mock_run.side_effect = None
+        mock_run.return_value = mock_proc
+        ok_literal_s = manager.input_interact("text", text="Code%sVal")
+        self.assertTrue(ok_literal_s)
+        # Should split on %s and send: "Code", "%", "s", "Val"
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        sent_texts = [c[4] for c in calls if len(c) > 4 and c[3] == "text"]
+        self.assertEqual(sent_texts, ["Code", "%", "s", "Val"])
 
         # Test keyevent 66 failure returns False
         mock_run.reset_mock()
@@ -491,6 +505,244 @@ class TestADBManager(unittest.TestCase):
         mock_run.side_effect = [mock_proc, mock_fail, mock_proc]
         ok_fail = manager.input_interact("text", text="LineA\nLineB")
         self.assertFalse(ok_fail)
+
+
+class TestADBAdditionalFeatures(unittest.TestCase):
+    @patch("pathlib.Path.is_file")
+    @patch("shutil.which", return_value=None)
+    def test_find_adb_binary_bundled_and_cached(self, mock_which, mock_is_file):
+        from apk_extractor.adb import find_adb_binary
+        mock_is_file.side_effect = [True, False]
+        res1 = find_adb_binary()
+        self.assertIn("adb", res1)
+
+        mock_is_file.side_effect = [False, True]
+        res2 = find_adb_binary()
+        self.assertIn("adb", res2)
+
+        mock_is_file.side_effect = [False, False]
+        res3 = find_adb_binary()
+        self.assertEqual(res3, "adb")
+
+    def test_ensure_installed_lifecycle(self):
+        manager = ADBManager(adb_path="mock_adb")
+        with patch.object(manager, "is_installed", side_effect=[True]):
+            self.assertTrue(manager.ensure_installed())
+
+        with patch.object(manager, "is_installed", side_effect=[False, True]), \
+             patch.object(manager, "download_platform_tools", return_value=True):
+            self.assertTrue(manager.ensure_installed())
+
+        with patch.object(manager, "is_installed", return_value=False), \
+             patch.object(manager, "download_platform_tools", return_value=False):
+            self.assertFalse(manager.ensure_installed())
+
+    def test_download_platform_tools(self):
+        import io
+        import zipfile
+        import tempfile
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("platform-tools/adb", "#!/bin/sh\n")
+        zip_bytes = zip_buf.getvalue()
+
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+             patch("pathlib.Path.home", return_value=Path(tmp_dir)), \
+             patch("urllib.request.urlretrieve") as mock_retrieve:
+            def fake_retrieve(url, path):
+                Path(path).write_bytes(zip_bytes)
+            mock_retrieve.side_effect = fake_retrieve
+
+            progress = []
+            res = ADBManager.download_platform_tools(on_progress=progress.append)
+            self.assertTrue(res)
+            self.assertTrue((Path(tmp_dir) / ".apkx" / "platform-tools" / "adb").exists())
+
+        with patch("urllib.request.urlretrieve", side_effect=Exception("Network error")):
+            self.assertFalse(ADBManager.download_platform_tools())
+
+    @patch("subprocess.run")
+    def test_install_apk_failure_variants(self, mock_run):
+        import tempfile
+        manager = ADBManager(adb_path="mock_adb")
+
+        with tempfile.NamedTemporaryFile(suffix=".apk") as tmp:
+            # Downgrade error
+            mock_proc = MagicMock()
+            mock_proc.returncode = 1
+            mock_proc.stdout = "Failure [INSTALL_FAILED_VERSION_DOWNGRADE]\n"
+            mock_proc.stderr = ""
+            mock_run.return_value = mock_proc
+            ok, code, _ = manager.install_apk(tmp.name)
+            self.assertFalse(ok)
+            self.assertEqual(code, "VERSION_DOWNGRADE")
+
+            # Insufficient storage
+            mock_proc.stdout = "Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]\n"
+            ok, code, _ = manager.install_apk(tmp.name)
+            self.assertFalse(ok)
+            self.assertEqual(code, "INSUFFICIENT_STORAGE")
+
+            # Generic failure
+            mock_proc.stdout = "Failure [INSTALL_PARSE_FAILED_BAD_MANIFEST]\n"
+            ok, code, _ = manager.install_apk(tmp.name)
+            self.assertFalse(ok)
+            self.assertEqual(code, "INSTALL_FAILED")
+
+            # Timeout
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=["install"], timeout=180)
+            ok, code, _ = manager.install_apk(tmp.name)
+            self.assertFalse(ok)
+            self.assertEqual(code, "TIMEOUT")
+
+            # Generic Exception
+            mock_run.side_effect = RuntimeError("Broken Pipe")
+            ok, code, _ = manager.install_apk(tmp.name)
+            self.assertFalse(ok)
+            self.assertEqual(code, "EXECUTION_ERROR")
+
+    @patch("subprocess.run")
+    def test_device_controls_and_diagnostics(self, mock_run):
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = ""
+        mock_run.return_value = mock_proc
+
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Night mode
+        self.assertTrue(manager.toggle_night_mode(True))
+        self.assertTrue(manager.toggle_night_mode(False))
+
+        # Deep link
+        self.assertTrue(manager.open_deep_link("https://example.com/app"))
+
+        # Reset app data
+        mock_proc.stdout = "Success\n"
+        self.assertTrue(manager.reset_app_data("com.test.app"))
+
+        # Launch app
+        self.assertTrue(manager.launch_app("com.test.app", "com.test.app.MainActivity"))
+
+        # Get current screen
+        mock_proc.stdout = "mCurrentFocus=Window{123 u0 com.test.app/com.test.app.MainActivity}\n"
+        screen = manager.get_current_screen()
+        self.assertEqual(screen["package_name"], "com.test.app")
+        self.assertEqual(screen["activity_name"], "com.test.app.MainActivity")
+
+    @patch("subprocess.run")
+    def test_check_device_ready_variants(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        with patch.object(manager, "get_connected_devices") as mock_conn:
+            # No devices
+            mock_conn.return_value = []
+            ready, code, _ = manager.check_device_ready()
+            self.assertFalse(ready)
+            self.assertEqual(code, "NO_DEVICE")
+
+            # Unauthorized
+            mock_conn.return_value = [("DEV1", "unauthorized")]
+            ready, code, _ = manager.check_device_ready()
+            self.assertFalse(ready)
+            self.assertEqual(code, "UNAUTHORIZED")
+
+            # Offline
+            mock_conn.return_value = [("DEV1", "offline")]
+            ready, code, _ = manager.check_device_ready()
+            self.assertFalse(ready)
+            self.assertEqual(code, "OFFLINE")
+
+            # Ready
+            mock_conn.return_value = [("DEV1", "device")]
+            with patch.object(manager, "get_device_details", return_value={"serial": "DEV1", "status": "device"}):
+                ready, code, _ = manager.check_device_ready()
+                self.assertTrue(ready)
+                self.assertEqual(code, "READY")
+
+    @patch("subprocess.run")
+    def test_dump_ui_hierarchy(self, mock_run):
+        xml_content = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="Masuk" resource-id="com.app:id/btn_login" class="android.widget.Button" package="com.app" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[100,200][300,280]">
+  </node>
+</hierarchy>"""
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = xml_content
+        mock_run.return_value = mock_proc
+
+        manager = ADBManager(adb_path="mock_adb")
+        elements = manager.dump_ui_hierarchy()
+        self.assertEqual(len(elements), 1)
+        self.assertEqual(elements[0]["text"], "Masuk")
+        self.assertEqual(elements[0]["resource_id"], "com.app:id/btn_login")
+        self.assertEqual(elements[0]["center"], [200, 240])
+
+    @patch("subprocess.run")
+    def test_pull_file_error_handling(self, mock_run):
+        from apk_extractor.adb import ADBError
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Timeout
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["pull"], timeout=180)
+        with self.assertRaises(ADBError) as ctx:
+            manager.pull_file("/remote/app.apk", "/local/app.apk")
+        self.assertIn("Waktu habis", str(ctx.exception))
+
+        # CalledProcessError
+        mock_err = subprocess.CalledProcessError(returncode=1, cmd=["pull"], stderr="Permission denied")
+        mock_run.side_effect = mock_err
+        with self.assertRaises(ADBError) as ctx2:
+            manager.pull_file("/remote/app.apk", "/local/app.apk")
+        self.assertIn("Permission denied", str(ctx2.exception))
+
+    @patch("subprocess.run")
+    def test_take_screenshot_fallback(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        # First call (exec-out) returns corrupt/small data
+        mock_exec_out = MagicMock(returncode=1, stdout=b"")
+        mock_shell_screencap = MagicMock(returncode=0)
+        mock_rm = MagicMock(returncode=0)
+
+        mock_run.side_effect = [mock_exec_out, mock_shell_screencap, mock_rm]
+
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            with patch.object(manager, "pull_file") as mock_pull:
+                def fake_pull(rem, loc, device_id=None):
+                    Path(loc).write_bytes(b"\x89PNG\r\n\x1a\nfakeimage")
+                mock_pull.side_effect = fake_pull
+
+                ok = manager.take_screenshot(tmp.name)
+                self.assertTrue(ok)
+
+    @patch("subprocess.run")
+    def test_ensure_device_awake_asleep_and_pin(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Case 1: Asleep -> wakes up with keyevent 224, then unlocked
+        proc_stay = MagicMock(returncode=0)
+        proc_pwr_asleep = MagicMock(returncode=0, stdout="mWakefulness=Asleep\n")
+        proc_win_unlocked = MagicMock(returncode=0, stdout="mKeyguardShowing=false\nisStatusBarKeyguard=false\n")
+
+        mock_run.side_effect = [proc_stay, proc_pwr_asleep, proc_win_unlocked]
+        with patch.object(manager, "input_interact") as mock_interact:
+            res = manager.ensure_device_awake(stay_on=True)
+            self.assertEqual(res["status"], "ready")
+            mock_interact.assert_called_with("keyevent", keycode=224, device_id=None)
+
+        # Case 2: Locked -> unlocked by PIN
+        proc_pwr_awake = MagicMock(returncode=0, stdout="mWakefulness=Awake\n")
+        proc_win_locked = MagicMock(returncode=0, stdout="mKeyguardShowing=true\n")
+        proc_win_still_locked = MagicMock(returncode=0, stdout="mKeyguardShowing=true\n")
+        proc_win_pin_unlocked = MagicMock(returncode=0, stdout="mKeyguardShowing=false\n")
+
+        mock_run.side_effect = [proc_stay, proc_pwr_awake, proc_win_locked, proc_win_still_locked, proc_win_pin_unlocked]
+        with patch.object(manager, "input_interact"):
+            res2 = manager.ensure_device_awake(pin="1234", stay_on=True)
+            self.assertEqual(res2["status"], "ready")
+            self.assertIn("PIN", res2["message"])
 
 
 if __name__ == "__main__":

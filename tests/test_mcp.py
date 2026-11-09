@@ -2,7 +2,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from apk_extractor.mcp_server import create_mcp_server
 
@@ -379,8 +379,392 @@ class TestMCPServer(unittest.TestCase):
                 })
                 self.assertIn("error", str(res))
                 self.assertIn("rusak atau tidak lengkap", str(res))
+                self.assertIn("INVALID_ARCHIVE", str(res))
 
             asyncio.run(run_call())
+
+    def test_pull_and_extract_empty_query_returns_invalid_query(self):
+        async def run_call():
+            res = await self.server.call_tool("apkx_pull_and_extract", {
+                "query_or_package": "   ",
+            })
+            self.assertIn("INVALID_QUERY", str(res))
+
+        asyncio.run(run_call())
+
+    def test_pull_and_extract_invalid_path_returns_error(self):
+        async def run_call():
+            res = await self.server.call_tool("apkx_pull_and_extract", {
+                "query_or_package": "com.example.app",
+                "output_dir": "../../evil_dir",
+            })
+            self.assertIn("INVALID_PATH", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(False, "DEVICE_NOT_READY", {"status": "error", "message": "No device"}))
+    def test_pull_and_extract_device_not_ready(self, mock_ready, mock_ensured):
+        async def run_call():
+            res = await self.server.call_tool("apkx_pull_and_extract", {
+                "query_or_package": "com.example.app",
+            })
+            self.assertIn("DEVICE_NOT_READY", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=[])
+    @patch("apk_extractor.app_names.resolve_apps", return_value=[])
+    def test_pull_and_extract_app_not_found(self, mock_resolve, mock_pkgs, mock_ready, mock_ensured):
+        async def run_call():
+            res = await self.server.call_tool("apkx_pull_and_extract", {
+                "query_or_package": "com.nonexistent.app",
+            })
+            self.assertIn("APP_NOT_FOUND", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=["com.found.app"])
+    @patch("apk_extractor.app_names.resolve_apps")
+    @patch("apk_extractor.adb.ADBManager.get_package_apk_paths", return_value=[])
+    def test_pull_and_extract_apk_not_found(self, mock_paths, mock_resolve, mock_pkgs, mock_ready, mock_ensured):
+        from apk_extractor.app_names import AppInfo
+        mock_resolve.return_value = [AppInfo(app_name="FoundApp", package_name="com.found.app")]
+        async def run_call():
+            res = await self.server.call_tool("apkx_pull_and_extract", {
+                "query_or_package": "com.found.app",
+            })
+            self.assertIn("APK_NOT_FOUND", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=["com.found.app"])
+    @patch("apk_extractor.app_names.resolve_apps")
+    @patch("apk_extractor.adb.ADBManager.get_package_apk_paths", return_value=["/data/app/base.apk"])
+    @patch("apk_extractor.packager.APKPackager.extract")
+    @patch("apk_extractor.packager.APKPackager.unpack")
+    @patch("apk_extractor.packager.APKPackager.generate_analysis_summary")
+    def test_pull_and_extract_success(self, mock_summary, mock_unpack, mock_extract, mock_paths, mock_resolve, mock_pkgs, mock_ready, mock_ensured):
+        from apk_extractor.app_names import AppInfo
+        mock_resolve.return_value = [AppInfo(app_name="FoundApp", package_name="com.found.app")]
+        with tempfile.TemporaryDirectory() as tmp_d:
+            out_p = Path(tmp_d) / "app.apk"
+            out_p.touch()
+
+            mock_res = MagicMock()
+            mock_res.app_name = "FoundApp"
+            mock_res.package_name = "com.found.app"
+            mock_res.is_split = False
+            mock_res.total_parts = 1
+            mock_res.output_path = out_p
+            mock_extract.return_value = mock_res
+            mock_summary.return_value = {"framework": "Flutter", "total_urls": 5, "total_classes": 10}
+
+            async def run_call():
+                res = await self.server.call_tool("apkx_pull_and_extract", {
+                    "query_or_package": "com.found.app",
+                    "output_dir": tmp_d,
+                })
+                self.assertIn("success", str(res))
+                self.assertIn("FoundApp", str(res))
+
+            asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=["com.found.app"])
+    @patch("apk_extractor.app_names.resolve_apps")
+    @patch("apk_extractor.adb.ADBManager.get_package_apk_paths", return_value=["/data/app/base.apk"])
+    @patch("apk_extractor.packager.APKPackager.extract")
+    @patch("apk_extractor.packager.APKPackager.unpack", side_effect=OSError("Disk full"))
+    def test_pull_and_extract_io_error(self, mock_unpack, mock_extract, mock_paths, mock_resolve, mock_pkgs, mock_ready, mock_ensured):
+        from apk_extractor.app_names import AppInfo
+        mock_resolve.return_value = [AppInfo(app_name="FoundApp", package_name="com.found.app")]
+        with tempfile.TemporaryDirectory() as tmp_d:
+            out_p = Path(tmp_d) / "app.apk"
+            out_p.touch()
+
+            mock_res = MagicMock()
+            mock_res.app_name = "FoundApp"
+            mock_res.package_name = "com.found.app"
+            mock_res.output_path = out_p
+            mock_extract.return_value = mock_res
+
+            async def run_call():
+                res = await self.server.call_tool("apkx_pull_and_extract", {
+                    "query_or_package": "com.found.app",
+                    "output_dir": tmp_d,
+                })
+                self.assertIn("IO_ERROR", str(res))
+
+            asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=["com.found.app"])
+    @patch("apk_extractor.app_names.resolve_apps")
+    @patch("apk_extractor.adb.ADBManager.get_package_apk_paths", return_value=["/data/app/base.apk"])
+    @patch("apk_extractor.packager.APKPackager.extract")
+    @patch("apk_extractor.packager.APKPackager.unpack", side_effect=RuntimeError("Unexpected blow up"))
+    def test_pull_and_extract_internal_error(self, mock_unpack, mock_extract, mock_paths, mock_resolve, mock_pkgs, mock_ready, mock_ensured):
+        from apk_extractor.app_names import AppInfo
+        mock_resolve.return_value = [AppInfo(app_name="FoundApp", package_name="com.found.app")]
+        with tempfile.TemporaryDirectory() as tmp_d:
+            out_p = Path(tmp_d) / "app.apk"
+            out_p.touch()
+
+            mock_res = MagicMock()
+            mock_res.app_name = "FoundApp"
+            mock_res.package_name = "com.found.app"
+            mock_res.output_path = out_p
+            mock_extract.return_value = mock_res
+
+            async def run_call():
+                res = await self.server.call_tool("apkx_pull_and_extract", {
+                    "query_or_package": "com.found.app",
+                    "output_dir": tmp_d,
+                })
+                self.assertIn("INTERNAL_ERROR", str(res))
+
+            asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.get_devices_with_details", return_value=[{"serial": "DEV1", "status": "device"}])
+    def test_list_devices_tool(self, mock_devs, mock_ensured):
+        async def run_call():
+            res = await self.server.call_tool("apkx_list_devices", {})
+            self.assertIn("DEV1", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages", return_value=["com.pkg1"])
+    @patch("apk_extractor.app_names.resolve_apps")
+    def test_list_apps_tool(self, mock_resolve, mock_pkgs, mock_ready, mock_ensured):
+        from apk_extractor.app_names import AppInfo
+        mock_resolve.return_value = [AppInfo(app_name="PkgOne", package_name="com.pkg1")]
+        async def run_call():
+            res = await self.server.call_tool("apkx_list_apps", {})
+            self.assertIn("com.pkg1", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.get_package_quick_info", return_value={"package_name": "com.pkg1", "version_name": "1.0"})
+    def test_get_app_info_tool(self, mock_info, mock_ready, mock_ensured):
+        async def run_call():
+            res = await self.server.call_tool("apkx_get_app_info", {"package_name": "com.pkg1"})
+            self.assertIn("com.pkg1", str(res))
+
+        asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.take_screenshot", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.get_screen_size", return_value=(1080, 2400))
+    def test_take_screenshot_tool(self, mock_size, mock_shot, mock_ready, mock_ensured):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            screen_file = Path(tmp_d) / "screen.png"
+            screen_file.write_bytes(b"image")
+
+            async def run_call():
+                res = await self.server.call_tool("apkx_take_screenshot", {"output_path": str(screen_file)})
+                self.assertIn("success", str(res))
+
+            asyncio.run(run_call())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.install_apk", return_value=(True, "SUCCESS", {"status": "success"}))
+    def test_install_uninstall_tools(self, mock_install, mock_ready, mock_ensured):
+        with tempfile.NamedTemporaryFile(suffix=".apk") as tmp:
+            async def run_call():
+                res = await self.server.call_tool("apkx_install_apk", {"apk_path": tmp.name})
+                self.assertIn("success", str(res))
+
+            asyncio.run(run_call())
+
+        with patch("apk_extractor.adb.ADBManager.uninstall_app", return_value=(True, "SUCCESS", {"status": "success"})):
+            async def run_uninstall():
+                res = await self.server.call_tool("apkx_uninstall_app", {"package_name": "com.test"})
+                self.assertIn("success", str(res))
+
+            asyncio.run(run_uninstall())
+
+    def test_class_skeleton_tool(self):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            p = Path(tmp_d)
+            # Test when class_skeleton.txt exists
+            (p / "class_skeleton.txt").write_text("class TestClass {}", encoding="utf-8")
+            async def run1():
+                res = await self.server.call_tool("apkx_get_class_skeleton", {"target_path": str(p)})
+                self.assertIn("TestClass", str(res))
+            asyncio.run(run1())
+
+            (p / "class_skeleton.txt").unlink()
+            # Test fallback to extract_class_skeleton_from_dir
+            with patch("apk_extractor.mcp_server.extract_class_skeleton_from_dir", return_value={"total_classes": 1, "app_classes": ["com.test.Foo"]}), \
+                 patch("apk_extractor.mcp_server.format_skeleton_text", return_value="Formatted Skeleton"):
+                async def run2():
+                    res = await self.server.call_tool("apkx_get_class_skeleton", {"target_path": str(p)})
+                    self.assertIn("Formatted Skeleton", str(res))
+                asyncio.run(run2())
+
+            # Test invalid path (non-directory)
+            async def run3():
+                res = await self.server.call_tool("apkx_get_class_skeleton", {"target_path": str(p / "nonexistent")})
+                self.assertIn("Path tidak valid", str(res))
+            asyncio.run(run3())
+
+    def test_inspect_class_tool(self):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            # 1. Non-existent APK
+            async def run_nonexistent():
+                res = await self.server.call_tool("apkx_inspect_class", {"target_apk": str(Path(tmp_d) / "none.apk"), "class_name": "com.test.Main"})
+                self.assertIn("tidak ditemukan", str(res))
+            asyncio.run(run_nonexistent())
+
+            real_apk = Path(tmp_d) / "app.apk"
+            real_apk.touch()
+
+            # 2. JADX unavailable
+            with patch("apk_extractor.jadx.JADXManager.ensure_installed", return_value=False):
+                async def run_no_jadx():
+                    res = await self.server.call_tool("apkx_inspect_class", {"target_apk": str(real_apk), "class_name": "com.test.Main"})
+                    self.assertIn("Engine JADX belum terpasang", str(res))
+                asyncio.run(run_no_jadx())
+
+            # 3. Success decompile
+            with patch("apk_extractor.jadx.JADXManager.ensure_installed", return_value=True), \
+                 patch("apk_extractor.jadx.JADXManager.decompile_class", return_value="public class Main {}"):
+                async def run_success():
+                    res = await self.server.call_tool("apkx_inspect_class", {"target_apk": str(real_apk), "class_name": "com.test.Main"})
+                    self.assertIn("public class Main", str(res))
+                asyncio.run(run_success())
+
+            # 4. Failure decompile
+            with patch("apk_extractor.jadx.JADXManager.ensure_installed", return_value=True), \
+                 patch("apk_extractor.jadx.JADXManager.decompile_class", return_value=None):
+                async def run_fail():
+                    res = await self.server.call_tool("apkx_inspect_class", {"target_apk": str(real_apk), "class_name": "com.test.Main"})
+                    self.assertIn("Gagal mendekomposisi kelas", str(res))
+                asyncio.run(run_fail())
+
+    def test_find_classes_tool_extended(self):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            p = Path(tmp_d)
+            # 1. Non-directory
+            async def run1():
+                res = await self.server.call_tool("apkx_find_classes", {"target_path": str(p / "none"), "query": "auth"})
+                self.assertIn("bukan direktori yang valid", str(res))
+            asyncio.run(run1())
+
+            # 2. Empty query
+            async def run2():
+                res = await self.server.call_tool("apkx_find_classes", {"target_path": str(p), "query": "  "})
+                self.assertIn("tidak boleh kosong", str(res))
+            asyncio.run(run2())
+
+            # 3. Corrupt skeleton json fallback
+            (p / "class_skeleton.json").write_text("{corrupt-json}", encoding="utf-8")
+            with patch("apk_extractor.mcp_server.extract_class_skeleton_from_dir", return_value={"app_classes": ["com.test.AuthService"], "all_classes": []}):
+                async def run3():
+                    res = await self.server.call_tool("apkx_find_classes", {"target_path": str(p), "query": "auth"})
+                    self.assertIn("AuthService", str(res))
+                asyncio.run(run3())
+
+    def test_search_endpoints_tool(self):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            p = Path(tmp_d)
+            # 1. Non-directory
+            async def run1():
+                res = await self.server.call_tool("apkx_search_endpoints", {"target_path": str(p / "none")})
+                self.assertIn("bukan direktori yang valid", str(res))
+            asyncio.run(run1())
+
+            # 2. Endpoints file missing, fallback
+            with patch("apk_extractor.mcp_server.extract_endpoints_from_dir", return_value={"domains": ["api.example.com"], "all_endpoints": ["https://api.example.com/v1"]}):
+                async def run2():
+                    res = await self.server.call_tool("apkx_search_endpoints", {"target_path": str(p)})
+                    self.assertIn("api.example.com", str(res))
+                asyncio.run(run2())
+
+            # 3. With query
+            (p / "endpoints.json").write_text('{"domains": ["api.example.com", "cdn.other.com"], "all_endpoints": ["https://api.example.com/login"]}', encoding="utf-8")
+            async def run3():
+                res = await self.server.call_tool("apkx_search_endpoints", {"target_path": str(p), "query": "login"})
+                self.assertIn("https://api.example.com/login", str(res))
+            asyncio.run(run3())
+
+    def test_extract_sqlite_schema_tool(self):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            p = Path(tmp_d)
+            # 1. Non-existent path
+            async def run1():
+                res = await self.server.call_tool("apkx_extract_sqlite_schema", {"target_path": str(p / "none")})
+                self.assertIn("tidak ditemukan", str(res))
+            asyncio.run(run1())
+
+            # 2. Existing path
+            with patch("apk_extractor.mcp_server.extract_sqlite_schema_from_dir", return_value={"total_tables": 1, "tables": {"users": ["id"]}}):
+                async def run2():
+                    res = await self.server.call_tool("apkx_extract_sqlite_schema", {"target_path": str(p)})
+                    self.assertIn("users", str(res))
+                asyncio.run(run2())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(False, "DEVICE_NOT_READY", {"status": "error", "message": "Device offline"}))
+    def test_tools_device_not_ready(self, mock_ready, mock_ensured):
+        async def run_not_ready():
+            res1 = await self.server.call_tool("apkx_take_screenshot", {})
+            self.assertIn("offline", str(res1))
+            res2 = await self.server.call_tool("apkx_dump_ui_hierarchy", {})
+            self.assertIn("offline", str(res2))
+            res3 = await self.server.call_tool("apkx_interact", {"action": "tap", "x": 100, "y": 200})
+            self.assertIn("offline", str(res3))
+            res4 = await self.server.call_tool("apkx_get_current_screen", {})
+            self.assertIn("offline", str(res4))
+            res5 = await self.server.call_tool("apkx_open_deep_link", {"url": "https://test.com"})
+            self.assertIn("offline", str(res5))
+            res6 = await self.server.call_tool("apkx_toggle_night_mode", {"enable": True})
+            self.assertIn("offline", str(res6))
+            res7 = await self.server.call_tool("apkx_install_apk", {"apk_path": "/tmp/a.apk"})
+            self.assertIn("offline", str(res7))
+            res8 = await self.server.call_tool("apkx_uninstall_app", {"package_name": "com.test"})
+            self.assertIn("offline", str(res8))
+            res9 = await self.server.call_tool("apkx_launch_app", {"package_name": "com.test"})
+            self.assertIn("offline", str(res9))
+            res10 = await self.server.call_tool("apkx_reset_app_data", {"package_name": "com.test"})
+            self.assertIn("offline", str(res10))
+            res11 = await self.server.call_tool("apkx_get_app_logs", {"package_name": "com.test"})
+            self.assertIn("offline", str(res11))
+        asyncio.run(run_not_ready())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.take_screenshot", return_value=False)
+    @patch("apk_extractor.adb.ADBManager.get_screen_size", return_value=(1080, 2400))
+    def test_take_screenshot_failure(self, mock_size, mock_shot, mock_ready, mock_ensured):
+        async def run_fail():
+            res = await self.server.call_tool("apkx_take_screenshot", {"output_path": "/tmp/nonexistent/screen.png"})
+            self.assertIn("Gagal mengambil tangkapan layar", str(res))
+        asyncio.run(run_fail())
+
+    @patch("apk_extractor.mcp_server.create_mcp_server")
+    def test_run_mcp_server_entrypoint(self, mock_create):
+        from apk_extractor.mcp_server import run_mcp_server
+        mock_srv = MagicMock()
+        mock_create.return_value = mock_srv
+        run_mcp_server(transport="stdio")
+        mock_srv.run.assert_called_once_with(transport="stdio")
 
 
 if __name__ == "__main__":

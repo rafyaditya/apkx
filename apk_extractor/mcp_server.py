@@ -6,15 +6,7 @@ Exposes ADB device operations, APK extraction, manifest decoding, and on-demand 
 import json
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-try:
-    from mcp.server.mcpserver import MCPServer
-except ImportError:
-    try:
-        from mcp.server.fastmcp import FastMCP as MCPServer
-    except ImportError:
-        MCPServer = None
+from typing import Any, Dict, List, Optional, Tuple
 
 from apk_extractor.adb import ADBError, ADBManager
 from apk_extractor.app_names import resolve_apps
@@ -22,7 +14,46 @@ from apk_extractor.axml import decode_axml
 from apk_extractor.dex import extract_class_skeleton_from_dir, format_skeleton_text
 from apk_extractor.endpoints import extract_endpoints_from_dir, extract_endpoints_from_file
 from apk_extractor.jadx import JADXManager
+from apk_extractor.logger import logger
 from apk_extractor.packager import APKPackager, extract_sqlite_schema_from_dir, sanitize_filename
+
+MCPServer: Any = None
+try:
+    from mcp.server.mcpserver import MCPServer as _MCPServer
+    MCPServer = _MCPServer
+except Exception:
+    try:
+        import mcp.server.fastmcp as _fastmcp
+        MCPServer = getattr(_fastmcp, "FastMCP", None)
+    except Exception:
+        MCPServer = None
+
+
+def _resolve_output_path(output_dir: str) -> Path:
+    raw = Path(output_dir).expanduser()
+    if any(part == ".." for part in raw.parts):
+        raise ValueError("output_dir tidak boleh mengandung '..'.")
+
+    resolved = raw if raw.is_absolute() else (Path.cwd() / raw)
+    resolved = resolved.resolve()
+
+    if resolved == Path(resolved.anchor):
+        raise ValueError(
+            "output_dir tidak boleh menunjuk ke root filesystem."
+        )
+
+    return resolved
+
+
+def _ensure_within(base: Path, candidate: Path) -> Path:
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(
+            f"Path '{candidate}' keluar dari '{base}'."
+        ) from exc
+    return resolved
 
 
 def create_mcp_server() -> Any:
@@ -123,92 +154,208 @@ def create_mcp_server() -> Any:
         device_id: Optional[str] = None,
         output_dir: str = "output",
     ) -> Dict[str, Any]:
-        """
-        Pulls an application APK (including all Split APKs bundled as .apks) from the Android device,
-        unpacks its contents, decodes the AndroidManifest.xml, extracts API endpoints, and generates class skeletons.
-        """
-        adb.ensure_installed()
-        ready, code, detail = adb.check_device_ready(device_id=device_id)
-        if not ready:
-            return detail
-        out_path = Path(output_dir)
+        package_query = (query_or_package or "").strip()
+        if not package_query:
+            return {
+                "status": "error",
+                "code": "INVALID_QUERY",
+                "message": "Query pencarian aplikasi tidak boleh kosong.",
+                "package_name": "unknown",
+            }
 
-        # 1. Resolve package
-        packages = adb.list_packages(device_id=device_id, third_party_only=False)
-        apps = resolve_apps(adb, packages, device_id=device_id)
+        try:
+            out_path = _resolve_output_path(output_dir)
+            apks_dir = _ensure_within(out_path, out_path / "apks")
+            extracted_dir = _ensure_within(
+                out_path,
+                out_path / "extracted",
+            )
+            apks_dir.mkdir(parents=True, exist_ok=True)
+            extracted_dir.mkdir(parents=True, exist_ok=True)
+        except ValueError as exc:
+            return {
+                "status": "error",
+                "code": "INVALID_PATH",
+                "message": str(exc),
+                "package_name": package_query,
+            }
+        except OSError as exc:
+            return {
+                "status": "error",
+                "code": "IO_ERROR",
+                "message": f"Kegagalan I/O atau media penyimpanan: {exc}",
+                "package_name": package_query,
+            }
 
-        target_app = None
-        q_clean = query_or_package.strip().lower()
-        for a in apps:
-            if a.package_name.lower() == q_clean or a.app_name.lower() == q_clean:
-                target_app = a
-                break
-        if not target_app:
-            for a in apps:
-                if q_clean in a.package_name.lower() or q_clean in a.app_name.lower():
-                    target_app = a
+        try:
+            adb.ensure_installed()
+            ready, _code, detail = adb.check_device_ready(
+                device_id=device_id
+            )
+            if not ready:
+                return {
+                    **detail,
+                    "status": "error",
+                    "code": detail.get("code") or _code or "DEVICE_NOT_READY",
+                    "package_name": package_query,
+                }
+
+            packages = adb.list_packages(
+                device_id=device_id,
+                third_party_only=False,
+            )
+            apps = resolve_apps(
+                adb,
+                packages,
+                device_id=device_id,
+            )
+
+            target_app = None
+            q_clean = package_query.lower()
+            for app in apps:
+                if (
+                    app.package_name.lower() == q_clean
+                    or app.app_name.lower() == q_clean
+                ):
+                    target_app = app
                     break
 
-        if not target_app:
+            if not target_app:
+                for app in apps:
+                    if (
+                        q_clean in app.package_name.lower()
+                        or q_clean in app.app_name.lower()
+                    ):
+                        target_app = app
+                        break
+
+            if not target_app:
+                return {
+                    "status": "error",
+                    "code": "APP_NOT_FOUND",
+                    "message": (
+                        f"Aplikasi '{query_or_package}' tidak ditemukan "
+                        "di perangkat."
+                    ),
+                    "package_name": package_query,
+                }
+
+            apk_paths = adb.get_package_apk_paths(
+                target_app.package_name,
+                device_id=device_id,
+            )
+            if not apk_paths:
+                return {
+                    "status": "error",
+                    "code": "APK_NOT_FOUND",
+                    "message": (
+                        "Tidak dapat menemukan lokasi file APK untuk "
+                        f"{target_app.package_name}."
+                    ),
+                    "package_name": target_app.package_name,
+                }
+
+            extract_res = packager.extract(
+                package_name=target_app.package_name,
+                remote_paths=apk_paths,
+                output_dir=apks_dir,
+                app_name=target_app.app_name,
+                device_id=device_id,
+            )
+
+            try:
+                app_extracted_folder = _ensure_within(
+                    extracted_dir,
+                    extracted_dir
+                    / sanitize_filename(extract_res.app_name),
+                )
+            except ValueError as exc:
+                return {
+                    "status": "error",
+                    "code": "INVALID_PATH",
+                    "message": str(exc),
+                    "package_name": target_app.package_name,
+                }
+
+            packager.unpack(
+                extract_res.output_path,
+                app_extracted_folder,
+            )
+
+            summary = packager.generate_analysis_summary(
+                app_extracted_folder,
+                extract_res.app_name,
+                extract_res.package_name,
+            )
+
+            decoded_manifest_file = (
+                app_extracted_folder / "AndroidManifest_readable.xml"
+            )
+            endpoints_file = app_extracted_folder / "endpoints.json"
+            skeleton_file = app_extracted_folder / "class_skeleton.txt"
+
             return {
-                "status": "error",
-                "message": f"Aplikasi '{query_or_package}' tidak ditemukan di perangkat.",
-            }
-
-        apk_paths = adb.get_package_apk_paths(target_app.package_name, device_id=device_id)
-        if not apk_paths:
-            return {
-                "status": "error",
-                "message": f"Tidak dapat menemukan lokasi file APK untuk {target_app.package_name}.",
-            }
-
-        apks_dir = out_path / "apks"
-        extracted_dir = out_path / "extracted"
-        apks_dir.mkdir(parents=True, exist_ok=True)
-        extracted_dir.mkdir(parents=True, exist_ok=True)
-
-        # Pull & package
-        extract_res = packager.extract(
-            package_name=target_app.package_name,
-            remote_paths=apk_paths,
-            output_dir=apks_dir,
-            app_name=target_app.app_name,
-            device_id=device_id,
-        )
-
-        # Unpack
-        app_folder_name = sanitize_filename(extract_res.app_name)
-        app_extracted_folder = extracted_dir / app_folder_name
-        try:
-            packager.unpack(extract_res.output_path, app_extracted_folder)
-        except (zipfile.BadZipFile, OSError, ValueError) as e:
-            return {
-                "status": "error",
-                "message": f"Gagal mengekstrak APK: Berkas arsip rusak atau tidak lengkap ({e}).",
-                "apk_path": str(extract_res.output_path.resolve()) if extract_res.output_path.exists() else None,
+                "status": "success",
+                "app_name": extract_res.app_name,
+                "package_name": extract_res.package_name,
                 "is_split": extract_res.is_split,
+                "total_parts": extract_res.total_parts,
+                "apk_path": str(extract_res.output_path.resolve()),
+                "extracted_folder": str(app_extracted_folder.resolve()),
+                "framework": summary.get("framework"),
+                "decoded_manifest": (
+                    str(decoded_manifest_file.resolve())
+                    if decoded_manifest_file.is_file()
+                    else None
+                ),
+                "endpoints_file": (
+                    str(endpoints_file.resolve())
+                    if endpoints_file.is_file()
+                    else None
+                ),
+                "class_skeleton_file": (
+                    str(skeleton_file.resolve())
+                    if skeleton_file.is_file()
+                    else None
+                ),
+                "total_urls_found": summary.get("total_urls", 0),
+                "total_classes_found": summary.get("total_classes", 0),
             }
 
-        # Summary analysis (Manifest, Endpoints, Skeleton)
-        summary = packager.generate_analysis_summary(
-            app_extracted_folder, extract_res.app_name, extract_res.package_name
-        )
-
-        return {
-            "status": "success",
-            "app_name": extract_res.app_name,
-            "package_name": extract_res.package_name,
-            "is_split": extract_res.is_split,
-            "total_parts": extract_res.total_parts,
-            "apk_path": str(extract_res.output_path.resolve()),
-            "extracted_folder": str(app_extracted_folder.resolve()),
-            "framework": summary.get("framework"),
-            "decoded_manifest": str((app_extracted_folder / "AndroidManifest_readable.xml").resolve()),
-            "endpoints_file": str((app_extracted_folder / "endpoints.json").resolve()),
-            "class_skeleton_file": str((app_extracted_folder / "class_skeleton.txt").resolve()),
-            "total_urls_found": summary.get("total_urls", 0),
-            "total_classes_found": summary.get("total_classes", 0),
-        }
+        except ADBError as exc:
+            return {
+                "status": "error",
+                "code": "ADB_ERROR",
+                "message": str(exc),
+                "package_name": package_query,
+            }
+        except (zipfile.BadZipFile, ValueError) as exc:
+            return {
+                "status": "error",
+                "code": "INVALID_ARCHIVE",
+                "message": (
+                    "Gagal mengekstrak APK: Berkas arsip rusak "
+                    f"atau tidak lengkap ({exc})."
+                ),
+                "package_name": package_query,
+            }
+        except OSError as exc:
+            return {
+                "status": "error",
+                "code": "IO_ERROR",
+                "message": f"Kegagalan I/O atau media penyimpanan: {exc}",
+                "package_name": package_query,
+            }
+        except Exception as exc:
+            logger.exception(
+                "Kesalahan tak terduga pada apkx_pull_and_extract"
+            )
+            return {
+                "status": "error",
+                "code": "INTERNAL_ERROR",
+                "message": str(exc),
+                "package_name": package_query,
+            }
 
     @server.tool()
     def apkx_get_manifest(target_path: str) -> str:
@@ -493,7 +640,11 @@ def create_mcp_server() -> Any:
         ready, code, detail = adb.check_device_ready(device_id=device_id)
         if not ready:
             return detail
-        coords_tuple = tuple(swipe_coords) if swipe_coords and len(swipe_coords) >= 4 else None
+        coords_tuple: Optional[Tuple[int, ...]] = (
+            tuple(swipe_coords)
+            if swipe_coords and len(swipe_coords) >= 4
+            else None
+        )
         ok = adb.input_interact(
             action=action,
             x=x,

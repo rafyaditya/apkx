@@ -1,5 +1,6 @@
 import struct
 import unittest
+from pathlib import Path
 from apk_extractor.dex import format_skeleton_text, parse_dex_classes
 
 
@@ -86,6 +87,31 @@ class TestDEXParser(unittest.TestCase):
         self.assertIn("TestApp", txt)
         self.assertIn("MainActivity", txt)
         self.assertIn("Service", txt)
+
+        # Empty classes
+        txt_empty = format_skeleton_text({"packages": [f"pkg{i}" for i in range(50)]}, "EmptyApp", "com.empty")
+        self.assertIn("Tidak ada kelas spesifik", txt_empty)
+        self.assertIn("package lainnya", txt_empty)
+
+    def test_extract_class_skeleton_from_dir(self):
+        import tempfile
+        from apk_extractor.dex import extract_class_skeleton_from_dir
+        with tempfile.TemporaryDirectory() as tmp_d:
+            tmp_path = Path(tmp_d)
+            dex_file = tmp_path / "classes.dex"
+            sample_classes = [
+                "com.mycompany.app.MainActivity",
+                "com.mycompany.app.data.Repository",
+                "android.view.View",
+                "androidx.core.App",
+            ]
+            dex_file.write_bytes(create_minimal_dex(sample_classes))
+
+            skeleton = extract_class_skeleton_from_dir(tmp_path, target_package="com.mycompany.app")
+            self.assertEqual(skeleton["total_classes"], 4)
+            self.assertEqual(skeleton["app_classes_count"], 2)
+            self.assertEqual(skeleton["third_party_classes_count"], 2)
+            self.assertIn("com.mycompany.app", skeleton["packages"])
 
 
 if __name__ == "__main__":

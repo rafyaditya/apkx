@@ -69,6 +69,57 @@ class TestSetupMCP(unittest.TestCase):
                     data = json.loads(fake_conf.read_text(encoding="utf-8"))
                     self.assertIn("apkx", data["mcpServers"])
 
+    def test_agents_and_package_skill_byte_identical(self):
+        repo_skill = (
+            Path(__file__).parent.parent
+            / ".agents"
+            / "skills"
+            / "apkx-android-blueprint"
+            / "SKILL.md"
+        )
+        pkg_skill = (
+            Path(__file__).parent.parent
+            / "apk_extractor"
+            / "data"
+            / "skills"
+            / "apkx-android-blueprint"
+            / "SKILL.md"
+        )
+        self.assertTrue(repo_skill.is_file(), f"Repo skill must exist: {repo_skill}")
+        self.assertTrue(pkg_skill.is_file(), f"Package skill must exist: {pkg_skill}")
+        self.assertEqual(repo_skill.read_bytes(), pkg_skill.read_bytes())
+
+    def test_load_skill_content(self):
+        from apk_extractor.setup_mcp import load_skill_content
+        content = load_skill_content()
+        self.assertIsInstance(content, str)
+        self.assertGreater(len(content), 1000)
+        self.assertIn("apkx-android-blueprint", content)
+
+    def test_load_skill_content_fallbacks(self):
+        from apk_extractor.setup_mcp import load_skill_content
+        with patch("importlib.resources.files", side_effect=Exception("No package data")):
+            content = load_skill_content()
+            self.assertIn("apkx-android-blueprint", content)
+
+    def test_sync_antigravity_skill_error(self):
+        with patch("pathlib.Path.mkdir", side_effect=PermissionError("Permission denied")):
+            from apk_extractor.setup_mcp import sync_antigravity_skill
+            res = sync_antigravity_skill()
+            self.assertEqual(res["status"], "error")
+            self.assertIn("Permission denied", res["error"])
+
+    def test_install_mcp_skips_uninstalled_clients(self):
+        with tempfile.TemporaryDirectory() as tmp_d:
+            non_existent_parent = Path(tmp_d) / "does_not_exist" / "config.json"
+            with patch(
+                "apk_extractor.setup_mcp.get_target_config_paths",
+                return_value=[("Cursor (Global)", non_existent_parent)],
+            ):
+                with patch("apk_extractor.setup_mcp.sync_antigravity_skill", return_value=None):
+                    results = install_mcp_to_all_clients()
+                    self.assertEqual(len(results), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

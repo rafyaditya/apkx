@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apkx"
-version = "1.4.2"
+version = "1.4.3"
 description = "AI-Native Android Reverse Engineering, Exploration & Blueprint Engine"
 readme = "README.md"
 authors = [{ name = "Developer" }]
@@ -30,6 +30,17 @@ dependencies = [
     "mcp>=1.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "mypy==1.15.0",
+    "build",
+    "twine",
+]
+
 [project.scripts]
 apkx = "apk_extractor.cli:app"
 
@@ -39,9 +50,30 @@ include = ["apk_extractor*"]
 [tool.setuptools.package-data]
 "apk_extractor" = ["data/skills/apkx-android-blueprint/*.md"]
 
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["apk_extractor"]
+branch = false
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
 
 [tool.ruff]
 line-length = 120

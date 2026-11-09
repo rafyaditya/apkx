@@ -2,35 +2,89 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, release/* ]
   pull_request:
     branches: [ main ]
 
 jobs:
   test:
+    name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies & apkx
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
-          pip install -e .
+          pip install -e ".[dev]"
 
-      - name: Run lint check
-        run: |
-          ruff check .
+      - name: Lint
+        run: ruff check .
 
-      - name: Run test suite
+      - name: Type check (3.12 only)
+        if: matrix.python-version == '3.12'
+        run: mypy apk_extractor
+
+      - name: Test + coverage gate (3.12 only)
+        if: matrix.python-version == '3.12'
         run: |
-          python -m unittest discover tests
+          pytest \
+            --cov=apk_extractor \
+            --cov-report=term \
+            --cov-report=xml \
+            --cov-fail-under=80 \
+            tests/
+
+      - name: Test (other Python versions)
+        if: matrix.python-version != '3.12'
+        run: pytest tests/
+
+  package:
+    name: Package Build & Smoke Test
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build clean artifacts
+        run: |
+          rm -rf dist
+          python -m build
+
+      - name: Check artifacts
+        run: twine check dist/*
+
+      - name: Fresh venv smoke test
+        run: |
+          python -m venv /tmp/smoke_env
+          /tmp/smoke_env/bin/pip install --upgrade pip
+          /tmp/smoke_env/bin/pip install dist/*.whl
+          /tmp/smoke_env/bin/pip check
+
+          cd /tmp
+
+          /tmp/smoke_env/bin/apkx --version
+          /tmp/smoke_env/bin/apkx --help
+
+          /tmp/smoke_env/bin/python -c \
+            "from apk_extractor.mcp_server import create_mcp_server; create_mcp_server()"
+
+          /tmp/smoke_env/bin/python -c \
+            "from apk_extractor.setup_mcp import load_skill_content; assert len(load_skill_content()) > 1000"

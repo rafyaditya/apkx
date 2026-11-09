@@ -56,6 +56,32 @@ class TestEndpointsExtractor(unittest.TestCase):
         self.assertEqual(res["total_urls"], 1)
         self.assertIn("api.valid.com", res["domains"])
 
+    def test_extract_endpoints_from_apks_bundle(self):
+        import io
+        sub_apk = io.BytesIO()
+        with zipfile.ZipFile(sub_apk, "w") as sub_zf:
+            sub_zf.writestr("classes.dex", b"https://api.splitbundle.com/v2/items")
+
+        bundle_path = self.temp_dir / "bundle.apks"
+        with zipfile.ZipFile(bundle_path, "w") as bzf:
+            bzf.writestr("base.apk", sub_apk.getvalue())
+
+        res = extract_endpoints_from_file(bundle_path)
+        self.assertEqual(res["total_urls"], 1)
+        self.assertIn("api.splitbundle.com", res["domains"])
+
+    def test_extract_endpoints_from_standalone_dex(self):
+        dex_path = self.temp_dir / "standalone.dex"
+        dex_path.write_bytes(b"some binary data https://api.standalone.com/graphql test")
+
+        res = extract_endpoints_from_file(dex_path)
+        self.assertEqual(res["total_urls"], 1)
+        self.assertIn("api.standalone.com", res["domains"])
+
+    def test_extract_endpoints_nonexistent_file(self):
+        res = extract_endpoints_from_file(Path("/nonexistent/file.apk"))
+        self.assertEqual(res["total_urls"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

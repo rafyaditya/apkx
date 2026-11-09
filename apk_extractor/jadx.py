@@ -36,7 +36,7 @@ def find_jadx_binary(custom_path: Optional[str] = None) -> str:
     if system_jadx:
         return system_jadx
 
-    if sys.platform == "win32":
+    if sys.platform == "win32":  # pragma: no cover
         system_bat = shutil.which("jadx.bat")
         if system_bat:
             return system_bat

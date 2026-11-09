@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import questionary
 from rich.console import Console
@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.theme import Theme
 
 # Pastikan output stream di Windows menggunakan UTF-8
-if sys.platform == "win32":
+if sys.platform == "win32":  # pragma: no cover
     try:
         if sys.stdout and hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -211,7 +211,7 @@ def select_package_interactive(apps: list, prefilter_query: Optional[str] = None
         else "Pilih aplikasi yang ingin diekstrak (ketik langsung untuk mencari/filter):"
     )
 
-    choices = []
+    choices: List[Union[questionary.Choice, str]] = []
     for item in apps:
         if hasattr(item, "app_name") and hasattr(item, "package_name"):
             choices.append(questionary.Choice(title=f"{item.app_name}  ({item.package_name})", value=item.package_name))

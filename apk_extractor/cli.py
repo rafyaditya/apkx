@@ -1,10 +1,11 @@
+import logging
 import sys
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
 # Pastikan output stream dan console di Windows menggunakan UTF-8
-if sys.platform == "win32":
+if sys.platform == "win32":  # pragma: no cover
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
@@ -234,6 +235,11 @@ def main(
         "--pin",
         help="PIN perangkat untuk membuka layar pada perintah wake",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        help="Tampilkan log debug ke stderr",
+    ),
     version: Optional[bool] = typer.Option(
         None,
         "--version",
@@ -246,6 +252,14 @@ def main(
     """
     Ekstrak file APK dari HP Android ke komputer dengan cepat dan rapi.
     """
+    if verbose:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="[%(levelname)s] %(name)s: %(message)s",
+            stream=sys.stderr,
+            force=True,
+        )
+
     # Validasi opsi yang berkonflik
     if all_apps and system_only:
         show_error("Opsi --all (-a) dan --system (-s) tidak dapat digunakan bersamaan.")
@@ -353,7 +367,7 @@ def main(
             out_target = out_target / "screen.png"
         out_target.parent.mkdir(parents=True, exist_ok=True)
 
-        ready, code, detail = adb.check_device_ready(device_id)
+        ready, _code, detail = adb.check_device_ready(device_id)
         if not ready:
             if as_json:
                 print(json.dumps(detail))
@@ -391,7 +405,7 @@ def main(
             show_error("Perintah 'apkx install' memerlukan path berkas APK atau .apks.\nContoh: apkx install app.apk atau apkx install app.apks")
             raise typer.Exit(code=2)
         apk_p = Path(target)
-        ready, code, detail = adb.check_device_ready(device_id)
+        ready, _code, detail = adb.check_device_ready(device_id)
         if not ready:
             if as_json:
                 print(json.dumps(detail))
@@ -423,7 +437,7 @@ def main(
             show_error("Perintah 'apkx uninstall' memerlukan nama package aplikasi.\nContoh: apkx uninstall com.example.app")
             raise typer.Exit(code=2)
         pkg_target = target.strip()
-        ready, code, detail = adb.check_device_ready(device_id)
+        ready, _code, detail = adb.check_device_ready(device_id)
         if not ready:
             if as_json:
                 print(json.dumps(detail))
@@ -445,7 +459,7 @@ def main(
 
     # 1.9 Sub-perintah Dump UI (apkx dump-ui [-d id] [--json])
     if query in ("dump-ui", "dump_ui", "ui"):
-        ready, code, detail = adb.check_device_ready(device_id)
+        ready, _code, detail = adb.check_device_ready(device_id)
         if not ready:
             if as_json:
                 print(json.dumps(detail))
@@ -492,7 +506,7 @@ def main(
             show_error("Perintah 'apkx logs' memerlukan nama package aplikasi.\nContoh: apkx logs com.example.app")
             raise typer.Exit(code=2)
         pkg_target = target.strip()
-        ready, code, detail = adb.check_device_ready(device_id)
+        ready, _code, detail = adb.check_device_ready(device_id)
         if not ready:
             if as_json:
                 print(json.dumps(detail))
@@ -514,7 +528,7 @@ def main(
 
     # 1.11 Sub-perintah Wake (apkx wake [--pin <PIN>] [-d id])
     if query in ("wake", "unlock"):
-        ready, code, detail = adb.check_device_ready(device_id)
+        ready, _code, detail = adb.check_device_ready(device_id)
         if not ready:
             if as_json:
                 print(json.dumps(detail))

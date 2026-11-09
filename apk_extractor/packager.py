@@ -1,98 +1,54 @@
+import contextlib
+import hashlib
 import json
+import os
 import re
 import shutil
 import sys
 import tempfile
+import threading
+import time
+import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 from apk_extractor.adb import ADBManager
 from apk_extractor.app_names import extract_apk_label, save_to_app_cache
+from apk_extractor.archive_utils import (
+    WINDOWS_RESERVED_NAMES as WINDOWS_RESERVED_NAMES,
+    safe_extract_zip as safe_extract_zip,
+    sanitize_archive_member_path as sanitize_archive_member_path,
+)
 from apk_extractor.axml import decode_axml
 from apk_extractor.dex import extract_class_skeleton_from_dir, format_skeleton_text
 from apk_extractor.endpoints import extract_endpoints_from_dir
 from apk_extractor.jadx import JADXManager
-
-WINDOWS_RESERVED_NAMES = {
-    "CON", "PRN", "AUX", "NUL",
-    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-}
-
-
-def sanitize_archive_member_path(member_path: str) -> Path:
-    """
-    Sanitizes archive member paths to prevent Zip Slip and Windows reserved names (CON, PRN, AUX, etc.).
-    """
-    parts = []
-    for part in Path(member_path).parts:
-        if part in ("..", "/", "\\", ""):
-            continue
-        p_stem = Path(part).stem.upper()
-        if p_stem in WINDOWS_RESERVED_NAMES:
-            part = f"_{part}"
-        parts.append(part)
-    return Path(*parts) if parts else Path()
-
-
-def safe_extract_zip(
-    zf: zipfile.ZipFile,
-    target_dir: Path,
-    progress_callback: Optional[Callable[[str, int, int], None]] = None,
-    task_label: str = "Mengekstrak berkas",
-) -> int:
-    """
-    Safely extracts all members from a ZipFile into target_dir.
-    Guards against Zip Slip and Windows reserved device names (PRN, CON, AUX, etc.).
-    Returns the total number of files extracted.
-    """
-    target_dir = target_dir.resolve()
-    members = zf.infolist()
-    total_members = len(members)
-    extracted_count = 0
-
-    for idx, member in enumerate(members, start=1):
-        clean_rel_path = sanitize_archive_member_path(member.filename)
-        if not clean_rel_path.parts:
-            continue
-
-        dest_path = (target_dir / clean_rel_path).resolve()
-        try:
-            dest_path.relative_to(target_dir)
-        except ValueError:
-            continue
-
-        if progress_callback and (idx % 25 == 0 or idx == total_members):
-            progress_callback(f"{task_label} ({idx}/{total_members}): {clean_rel_path.name}...", idx, total_members)
-
-        if member.is_dir() or member.filename.endswith("/"):
-            dest_path.mkdir(parents=True, exist_ok=True)
-        else:
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            dest_str = str(dest_path)
-            if sys.platform == "win32" and not dest_str.startswith("\\\\?\\"):
-                dest_str = f"\\\\?\\{dest_str}"
-
-            try:
-                with zf.open(member) as src, open(dest_str, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-            except Exception:
-                with zf.open(member) as src, open(dest_path, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-            extracted_count += 1
-
-    return extracted_count
+from apk_extractor.logger import logger
 
 
 def sanitize_filename(name: str) -> str:
     """
-    Membersihkan nama aplikasi agar aman digunakan sebagai nama file / folder di Windows & Linux.
+    Membersihkan nama aplikasi agar aman sebagai nama file/folder.
+    Menolak nama yang hanya terdiri dari titik ("." / "..") dan reserved name Windows.
     """
     clean = re.sub(r'[\\/*?:"<>|]', "", name).strip()
     clean = re.sub(r"\s+", "_", clean)
-    return clean if clean else "app"
+    clean = clean.strip(".")
+
+    if not clean:
+        return "app"
+
+    if clean.split(".")[0].upper() in WINDOWS_RESERVED_NAMES:
+        clean = f"_{clean}"
+
+    return clean
 
 
 def extract_sqlite_schema_from_dir(target_dir: Path) -> Dict[str, Any]:
@@ -197,6 +153,279 @@ def extract_sqlite_schema_from_dir(target_dir: Path) -> Dict[str, Any]:
     }
 
 
+_LOCKS: Dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _target_path(target_dir: Path) -> Path:
+    return Path(os.path.abspath(os.path.expanduser(str(target_dir))))
+
+
+def _target_digest(target_dir: Path) -> str:
+    raw = str(_target_path(target_dir)).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:12]
+
+
+def _swap_marker_path(target_dir: Path) -> Path:
+    return target_dir.parent / f".apkx_swap_{_target_digest(target_dir)}.json"
+
+
+def _staging_prefix(target_dir: Path) -> str:
+    return f"apkx_stage_{_target_digest(target_dir)}_"
+
+
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _remove_path(path: Path) -> None:
+    try:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp_{uuid.uuid4().hex}")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+    if sys.platform != "win32":
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+
+
+def _read_json(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+@contextlib.contextmanager
+def _target_lock(target_dir: Path) -> Iterator[None]:
+    lock_path = target_dir.parent / f".apkx_lock_{_target_digest(target_dir)}"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = str(lock_path.absolute())
+
+    with _LOCKS_GUARD:
+        tlock = _LOCKS.setdefault(key, threading.Lock())
+
+    if not tlock.acquire(blocking=False):
+        raise RuntimeError(f"Ekstraksi lain sedang berjalan untuk {target_dir}")
+
+    try:
+        with open(lock_path, "a+b") as fh:
+            if sys.platform == "win32":
+                fh.seek(0, os.SEEK_END)
+                if fh.tell() == 0:
+                    fh.write(b"\0")
+                    fh.flush()
+                fh.seek(0)
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Ekstraksi lain sedang berjalan untuk {target_dir}"
+                    ) from exc
+            else:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Ekstraksi lain sedang berjalan untuk {target_dir}"
+                    ) from exc
+
+            try:
+                yield
+            finally:
+                try:
+                    if sys.platform == "win32":
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+    finally:
+        tlock.release()
+
+
+def _backup_candidates(target_dir: Path) -> List[Path]:
+    parent = target_dir.parent
+    if not parent.is_dir():
+        return []
+    prefix = f"{target_dir.name}.bak_"
+    result: List[Path] = []
+    try:
+        for p in parent.iterdir():
+            if p.name.startswith(prefix) and p.is_dir() and not p.is_symlink():
+                result.append(p)
+    except OSError:
+        return []
+    return sorted(result, key=_safe_mtime, reverse=True)
+
+
+def _cleanup_backups(
+    target_dir: Path,
+    keep: Optional[Path] = None,
+    max_age_seconds: int = 7 * 86400,
+) -> None:
+    now = time.time()
+    for backup in _backup_candidates(target_dir):
+        if keep is not None and backup == keep:
+            continue
+        if now - _safe_mtime(backup) > max_age_seconds:
+            _remove_path(backup)
+
+
+def _cleanup_orphan_staging(
+    target_dir: Path,
+    max_age_seconds: int = 86400,
+) -> None:
+    parent = target_dir.parent
+    if not parent.is_dir():
+        return
+
+    digest = _target_digest(target_dir)
+    prefixes = (
+        f"apkx_stage_{digest}_",
+        f"apkx_unpack_apks_{digest}_",
+    )
+    marker_prefix = f".apkx_swap_{digest}.json.tmp_"
+    now = time.time()
+
+    try:
+        for p in parent.iterdir():
+            if p.is_dir() and not p.is_symlink():
+                if p.name.startswith(prefixes):
+                    if now - _safe_mtime(p) > max_age_seconds:
+                        _remove_path(p)
+            elif p.is_file():
+                if p.name.startswith(marker_prefix):
+                    if now - _safe_mtime(p) > max_age_seconds:
+                        _remove_path(p)
+    except OSError:
+        pass
+
+
+def _recover_interrupted_swap(target_dir: Path) -> None:
+    marker = _swap_marker_path(target_dir)
+    backups = _backup_candidates(target_dir)
+
+    if not marker.exists():
+        if backups and not target_dir.exists():
+            newest_backup = backups[0]
+            logger.warning(
+                "Target hilang! Memulihkan backup yatim: %s -> %s",
+                newest_backup,
+                target_dir,
+            )
+            try:
+                os.replace(newest_backup, target_dir)
+                _cleanup_backups(target_dir)
+            except OSError as exc:
+                logger.error("Gagal memulihkan backup yatim: %s", exc)
+        elif target_dir.exists():
+            _cleanup_backups(target_dir)
+        return
+
+    data = _read_json(marker)
+    marker_backup: Optional[Path] = None
+    if data:
+        raw = data.get("backup")
+        if isinstance(raw, str):
+            candidate = Path(raw)
+            if (
+                candidate.parent == target_dir.parent
+                and candidate.name.startswith(f"{target_dir.name}.bak_")
+                and candidate.is_dir()
+                and not candidate.is_symlink()
+            ):
+                marker_backup = candidate
+
+    candidates: List[Path] = []
+    if marker_backup is not None:
+        candidates.append(marker_backup)
+    candidates.extend(b for b in backups if b not in candidates)
+
+    if target_dir.exists():
+        _remove_path(marker)
+        _cleanup_backups(target_dir)
+        return
+
+    if candidates:
+        newest = candidates[0]
+        os.replace(newest, target_dir)
+        _remove_path(marker)
+        _cleanup_backups(target_dir)
+    else:
+        logger.warning(
+            "Marker swap ada tetapi backup tidak ditemukan untuk %s",
+            target_dir,
+        )
+        _remove_path(marker)
+
+
+def _commit_staging_locked(staging_dir: Path, target_dir: Path) -> None:
+    if not target_dir.exists() and not target_dir.is_symlink():
+        os.replace(staging_dir, target_dir)
+        return
+
+    backup_dir = target_dir.parent / f"{target_dir.name}.bak_{uuid.uuid4().hex}"
+    marker = _swap_marker_path(target_dir)
+
+    _write_json_atomic(
+        marker,
+        {
+            "target": str(target_dir),
+            "backup": str(backup_dir),
+            "pid": os.getpid(),
+            "created_at": time.time(),
+        },
+    )
+
+    moved_old = False
+    try:
+        os.replace(target_dir, backup_dir)
+        moved_old = True
+        os.replace(staging_dir, target_dir)
+    except BaseException:
+        if moved_old and not target_dir.exists() and backup_dir.exists():
+            try:
+                os.replace(backup_dir, target_dir)
+                moved_old = False
+            except OSError:
+                logger.critical(
+                    "Rollback gagal; backup tersimpan di %s",
+                    backup_dir,
+                )
+                raise
+        if target_dir.exists() and not backup_dir.exists():
+            _remove_path(marker)
+        raise
+    else:
+        _remove_path(backup_dir)
+        _remove_path(marker)
+
+
 @dataclass
 class ExtractionResult:
     package_name: str
@@ -251,11 +480,17 @@ class APKPackager:
             # Single APK
             remote_path = remote_paths[0]
             dest_file = output_dir / f"{file_base_name}.apk"
+            part_file = dest_file.with_name(f"{dest_file.name}.part")
 
             if progress_callback:
                 progress_callback(f"Menarik {remote_path.split('/')[-1]}...", 1, 1)
 
-            self.adb.pull_file(remote_path, str(dest_file), device_id=device_id)
+            try:
+                self.adb.pull_file(remote_path, str(part_file), device_id=device_id)
+                os.replace(part_file, dest_file)
+            finally:
+                if part_file.exists():
+                    part_file.unlink(missing_ok=True)
 
             # Auto-resolusi nama resmi dari APK jika tersedia
             official_label = extract_apk_label(dest_file)
@@ -308,12 +543,22 @@ class APKPackager:
                     file_base_name = sanitize_filename(display_name)
 
             apks_bundle_path = output_dir / f"{file_base_name}.apks"
+            part_bundle = apks_bundle_path.with_name(f"{apks_bundle_path.name}.part")
             if progress_callback:
                 progress_callback(f"Mengemas {total_parts} split APK ke dalam {apks_bundle_path.name}...", total_parts, total_parts)
 
-            with zipfile.ZipFile(apks_bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_bundle:
-                for file_path in pulled_files:
-                    zip_bundle.write(file_path, arcname=file_path.name)
+            try:
+                with zipfile.ZipFile(
+                    part_bundle,
+                    "w",
+                    compression=zipfile.ZIP_DEFLATED,
+                ) as zip_bundle:
+                    for file_path in pulled_files:
+                        zip_bundle.write(file_path, arcname=file_path.name)
+                os.replace(part_bundle, apks_bundle_path)
+            finally:
+                if part_bundle.exists():
+                    part_bundle.unlink(missing_ok=True)
 
             size_bytes = apks_bundle_path.stat().st_size
             return ExtractionResult(
@@ -334,103 +579,117 @@ class APKPackager:
         target_dir: Path,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> Path:
-        """
-        Membongkar isi file .apk atau .apks ke dalam target_dir secara atomik.
-        - Jika .apk: langsung diekstrak secara aman.
-        - Jika .apks: mengekstrak seluruh pecahan APK, di mana tiap split dibongkar ke subfolder.
-        Menerapkan Atomic Staging Pattern: target_dir tidak disentuh sebelum ekstraksi sukses 100%.
-        """
         archive_path = Path(archive_path)
-        target_dir = Path(target_dir)
+        target_dir = _target_path(Path(target_dir))
 
-        # 1. Validasi ekstensi yang didukung (.apk, .apks)
+        if target_dir.is_symlink():
+            raise ValueError(
+                f"Target direktori tidak boleh berupa symlink: {target_dir}"
+            )
+        if target_dir.exists() and not target_dir.is_dir():
+            raise ValueError(
+                f"Target path ada tetapi bukan direktori: {target_dir}"
+            )
+
         ext = archive_path.suffix.lower()
         if ext not in (".apk", ".apks"):
             raise ValueError(
-                f"Format arsip tidak didukung: '{archive_path.suffix}'. Hanya format .apk dan .apks yang diizinkan."
+                f"Format arsip tidak didukung: '{archive_path.suffix}'. "
+                "Hanya .apk dan .apks yang diizinkan."
+            )
+        if not archive_path.is_file():
+            raise FileNotFoundError(
+                f"Berkas arsip tidak ditemukan: {archive_path}"
+            )
+        if not zipfile.is_zipfile(archive_path):
+            raise zipfile.BadZipFile(
+                f"Berkas bukan arsip ZIP valid: {archive_path}"
             )
 
-        # 2. Validasi berkas fisik dan validitas ZIP sebelum menyentuh target_dir
-        if not archive_path.is_file():
-            raise FileNotFoundError(f"Berkas arsip tidak ditemukan: {archive_path}")
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
 
-        if not zipfile.is_zipfile(archive_path):
-            raise zipfile.BadZipFile(f"Berkas bukan arsip ZIP valid: {archive_path}")
+        with _target_lock(target_dir):
+            _recover_interrupted_swap(target_dir)
+            _cleanup_orphan_staging(target_dir)
 
-        # 3. Ekstrak konten ke temporary staging directory
-        staging_dir = Path(tempfile.mkdtemp(prefix="apkx_stage_unpack_"))
-        try:
-            if ext == ".apk":
-                # Ekstrak langsung file APK tunggal ke staging_dir
-                with zipfile.ZipFile(archive_path, "r") as zf:
-                    safe_extract_zip(
-                        zf,
-                        staging_dir,
-                        progress_callback=progress_callback,
-                        task_label=f"Mengekstrak {archive_path.name}",
-                    )
+            staging_dir = Path(
+                tempfile.mkdtemp(
+                    prefix=_staging_prefix(target_dir),
+                    dir=target_dir.parent,
+                )
+            )
+            try:
+                os.chmod(staging_dir, 0o755)
+            except OSError:
+                pass
 
-            elif ext == ".apks":
-                # Ekstrak paket APKS ke temporary split staging
-                temp_split_dir = Path(tempfile.mkdtemp(prefix="apkx_unpack_apks_"))
-                try:
-                    with zipfile.ZipFile(archive_path, "r") as bundle_zf:
+            try:
+                if ext == ".apk":
+                    with zipfile.ZipFile(archive_path, "r") as zf:
                         safe_extract_zip(
-                            bundle_zf,
-                            temp_split_dir,
+                            zf,
+                            staging_dir,
                             progress_callback=progress_callback,
-                            task_label="Membuka bundle APKS",
+                            task_label=f"Mengekstrak {archive_path.name}",
                         )
-
-                    split_files = sorted(list(temp_split_dir.glob("*.apk")))
-                    if not split_files:
-                        raise ValueError(f"Berkas bundle .apks '{archive_path.name}' tidak memuat berkas .apk di dalamnya.")
-
-                    total_splits = len(split_files)
-                    for split_idx, split_file in enumerate(split_files, start=1):
-                        subfolder_name = split_file.stem
-                        sub_out_dir = staging_dir / subfolder_name
-                        sub_out_dir.mkdir(parents=True, exist_ok=True)
-                        if progress_callback:
-                            progress_callback(
-                                f"Mengekstrak split ({split_idx}/{total_splits}): {split_file.name}",
-                                split_idx,
-                                total_splits,
-                            )
-                        with zipfile.ZipFile(split_file, "r") as split_zf:
+                else:
+                    temp_split_dir = Path(
+                        tempfile.mkdtemp(
+                            prefix=(
+                                "apkx_unpack_apks_"
+                                f"{_target_digest(target_dir)}_"
+                            ),
+                            dir=target_dir.parent,
+                        )
+                    )
+                    try:
+                        with zipfile.ZipFile(archive_path, "r") as bundle_zf:
                             safe_extract_zip(
-                                split_zf,
-                                sub_out_dir,
+                                bundle_zf,
+                                temp_split_dir,
                                 progress_callback=progress_callback,
-                                task_label=f"Mengekstrak {split_file.stem}",
+                                task_label="Membuka bundle APKS",
                             )
-                finally:
-                    if temp_split_dir.exists():
-                        shutil.rmtree(temp_split_dir, ignore_errors=True)
 
-            # Otomatis decode AndroidManifest.xml biner ke teks XML terbaca di staging
-            self.decode_manifest_files(staging_dir)
+                        split_files = sorted(temp_split_dir.glob("*.apk"))
+                        if not split_files:
+                            raise ValueError(
+                                f"Berkas bundle .apks '{archive_path.name}' "
+                                "tidak memuat .apk."
+                            )
 
-            # 4. Hanya jika seluruh proses ekstraksi di staging sukses 100%,
-            # bersihkan target_dir dan pindahkan file dari staging ke target_dir
-            target_dir.mkdir(parents=True, exist_ok=True)
-            for item in target_dir.iterdir():
-                try:
-                    if item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
-                    else:
-                        item.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                        total = len(split_files)
+                        for idx, split_file in enumerate(split_files, start=1):
+                            sub_out = staging_dir / split_file.stem
+                            sub_out.mkdir(parents=True, exist_ok=True)
 
-            for item in staging_dir.iterdir():
-                dest = target_dir / item.name
-                shutil.move(str(item), str(dest))
+                            if progress_callback:
+                                progress_callback(
+                                    "Mengekstrak split "
+                                    f"({idx}/{total}): {split_file.name}",
+                                    idx,
+                                    total,
+                                )
 
-        finally:
-            # 5. Selalu bersihkan staging directory
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                            with zipfile.ZipFile(split_file, "r") as split_zf:
+                                safe_extract_zip(
+                                    split_zf,
+                                    sub_out,
+                                    progress_callback=progress_callback,
+                                    task_label=f"Mengekstrak {split_file.stem}",
+                                )
+                    finally:
+                        if temp_split_dir.exists():
+                            shutil.rmtree(
+                                temp_split_dir,
+                                ignore_errors=True,
+                            )
+
+                self.decode_manifest_files(staging_dir)
+                _commit_staging_locked(staging_dir, target_dir)
+            finally:
+                if staging_dir.exists():
+                    _remove_path(staging_dir)
 
         return target_dir
 
@@ -636,7 +895,7 @@ class APKPackager:
         except Exception:
             pass
 
-        res = dict(fw_info)
+        res: Dict[str, Any] = dict(fw_info)
         res["total_urls"] = endpoints_data.get("total_urls", 0)
         res["decoded_manifest"] = str(decoded_manifest.name) if decoded_manifest else None
         res["total_classes"] = skeleton_data.get("total_classes", 0)

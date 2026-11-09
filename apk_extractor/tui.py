@@ -15,7 +15,7 @@ from apk_extractor.app_names import AppInfo
 def setup_universal_terminal() -> None:
     """Mengaktifkan UTF-8 dan Virtual Terminal Processing di Windows agar tampilan bersih di semua terminal."""
     import sys
-    if sys.platform == "win32":
+    if sys.platform == "win32":  # pragma: no cover
         try:
             import ctypes
             kernel32 = ctypes.windll.kernel32

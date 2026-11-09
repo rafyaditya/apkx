@@ -1,4 +1,4 @@
-# apkx - Android APK & Split-APK Extractor CLI
+# apkx (v1.4.3) - Android APK & Split-APK Extractor CLI
 
 Tool CLI interaktif dan cepat untuk mengekstrak dan menganalisis file APK dari aplikasi yang sudah terinstall di perangkat Android ke komputer Anda.
 
@@ -252,6 +252,18 @@ Server MCP `apkx` menyediakan 23 tools siap pakai:
 * `apkx_open_deep_link`: Buka rute halaman spesifik via URL/Deep Link Intent secara langsung.
 * `apkx_toggle_night_mode`: Beralih antara Dark Mode dan Light Mode untuk verifikasi visual multi-tema.
 
+#### Standar Kode Error Terstruktur MCP (Production Error Boundary)
+Seluruh tool MCP dijamin tidak akan melempar uncaught exception (`UnexpectedToolError`). Jika operasi gagal, response akan selalu berupa JSON terstruktur dengan format `{"status": "error", "error_code": "...", "message": "...", ...}` dengan kode error baku:
+- `DEVICE_NOT_READY`: Perangkat offline, tidak terdeteksi via ADB, atau izin USB Debugging belum disetujui (UNAUTHORIZED).
+- `APP_NOT_FOUND`: Aplikasi atau package ID tidak ditemukan pada perangkat target.
+- `APK_NOT_FOUND`: Berkas APK tidak ditemukan pada lokasi remote perangkat atau path lokal.
+- `ADB_ERROR`: Terjadi kegagalan komunikasi atau eksekusi perintah ADB subprocess.
+- `INVALID_ARCHIVE`: Berkas arsip APK/APKS korup, terpotong, atau bukan format zip yang valid.
+- `INVALID_PATH`: Path yang diberikan berada di luar batas direktori output yang diizinkan (mencegah path traversal).
+- `INVALID_QUERY`: Query pencarian kosong atau tidak valid.
+- `IO_ERROR`: Terjadi kegagalan I/O pada sistem berkas (akses ditolak, disk penuh, dsb.).
+- `INTERNAL_ERROR`: Error sistem tak terduga yang tertangkap oleh top-level error boundary.
+
 ### 15. Pembaruan Otomatis (Self-Update)
 Periksa dan perbarui `apkx` ke versi terbaru langsung dari GitHub:
 ```bash
@@ -289,5 +301,6 @@ apkx update --check
 | `--serve`, `--mcp` | - | Flag | Jalankan server Model Context Protocol (MCP) untuk AI Agent. |
 | `--update` | `-u` | Flag | Periksa dan perbarui apkx ke versi terbaru dari GitHub. |
 | `--check` | - | Flag | Hanya periksa pembaruan tanpa mengunduh atau menginstal. |
+| `--verbose` | - | Flag | Aktifkan logging diagnostik detail ke stderr (berguna untuk pelacakan error). |
 | `--version` | `-v` | Flag | Tampilkan versi apkx dan keluar. |
 | `--help` | - | Flag | Menampilkan bantuan ringkas seluruh perintah dan opsi yang tersedia. |

@@ -54,7 +54,10 @@ def load_skill_content() -> str:
         import importlib.resources as pkg_resources
         data_text = (
             pkg_resources.files("apk_extractor")
-            .joinpath("data", "skills", ANTIGRAVITY_SKILL_NAME, "SKILL.md")
+            .joinpath("data")
+            .joinpath("skills")
+            .joinpath(ANTIGRAVITY_SKILL_NAME)
+            .joinpath("SKILL.md")
             .read_text(encoding="utf-8")
         )
         if data_text and len(data_text) > 100:
@@ -108,12 +111,12 @@ def get_target_config_paths() -> List[Tuple[str, Path]]:
     configs.append(("Google Antigravity", antigravity_path))
 
     # 2. Claude Desktop
-    if sys.platform == "win32":
+    if sys.platform == "win32":  # pragma: no cover
         appdata = os.environ.get("APPDATA")
         if appdata:
             claude_path = Path(appdata) / "Claude" / "claude_desktop_config.json"
             configs.append(("Claude Desktop", claude_path))
-    elif sys.platform == "darwin":
+    elif sys.platform == "darwin":  # pragma: no cover
         claude_path = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
         configs.append(("Claude Desktop", claude_path))
     else:
@@ -129,7 +132,7 @@ def get_target_config_paths() -> List[Tuple[str, Path]]:
     configs.append(("Windsurf", windsurf_path))
 
     # 5. VS Code (Cline / Roo-Code)
-    if sys.platform == "win32":
+    if sys.platform == "win32":  # pragma: no cover
         appdata = os.environ.get("APPDATA")
         if appdata:
             cline_path = (

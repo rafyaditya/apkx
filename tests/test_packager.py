@@ -1,9 +1,13 @@
+import io
+import json
+import os
 import shutil
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from apk_extractor.adb import ADBManager
 from apk_extractor.packager import APKPackager, sanitize_filename
@@ -218,6 +222,143 @@ class TestAPKPackager(unittest.TestCase):
 
         self.assertTrue(important_file.exists())
         self.assertTrue((important_sub / "nested.txt").exists())
+
+    def test_framework_detection_variants(self):
+        # Unity
+        unity_dir = self.temp_out_dir / "unity_app"
+        unity_dir.mkdir()
+        (unity_dir / "lib" / "arm64").mkdir(parents=True)
+        (unity_dir / "lib" / "arm64" / "libunity.so").touch()
+        fw = self.packager.detect_framework(unity_dir)
+        self.assertIn("Unity", fw["framework"])
+
+        # React Native with Hermes bytecode
+        rn_dir = self.temp_out_dir / "rn_hermes"
+        (rn_dir / "assets").mkdir(parents=True)
+        (rn_dir / "assets" / "index.android.bundle").write_bytes(b"\xc6\x1f\xbc\x03" + b"hermes_code")
+        fw_rn = self.packager.detect_framework(rn_dir)
+        self.assertIn("Hermes", fw_rn["framework"])
+
+        # Native fallback with dex
+        native_dir = self.temp_out_dir / "native_app"
+        native_dir.mkdir()
+        (native_dir / "classes.dex").touch()
+        fw = self.packager.detect_framework(native_dir)
+        self.assertIn("Native Android", fw["framework"])
+
+    def test_extract_error_cleanup(self):
+        from apk_extractor.adb import ADBError
+        self.mock_adb.pull_file.side_effect = ADBError("ADB Pull Failed")
+
+        # Single APK
+        with self.assertRaises(ADBError):
+            self.packager.extract(
+                package_name="com.fail.single",
+                remote_paths=["/data/app/base.apk"],
+                output_dir=self.temp_out_dir,
+            )
+        # Part file should be cleaned up
+        parts = list(self.temp_out_dir.glob("*.part"))
+        self.assertEqual(parts, [])
+
+        # Split APK
+        with self.assertRaises(ADBError):
+            self.packager.extract(
+                package_name="com.fail.split",
+                remote_paths=["/data/app/base.apk", "/data/app/split.apk"],
+                output_dir=self.temp_out_dir,
+            )
+
+    def test_unpack_with_progress(self):
+        apk_path = self.temp_out_dir / "progress.apk"
+        with zipfile.ZipFile(apk_path, "w") as zf:
+            zf.writestr("test1.txt", "data")
+            zf.writestr("test2.txt", "data")
+
+        unpack_dir = self.temp_out_dir / "progress_extracted"
+        progress_calls = []
+        self.packager.unpack(apk_path, unpack_dir, progress_callback=lambda msg, cur, tot: progress_calls.append((msg, cur, tot)))
+        self.assertTrue(len(progress_calls) > 0)
+
+    def test_unpack_apks_multi_split(self):
+        apks_path = self.temp_out_dir / "split_bundle.apks"
+        base_bytes = io.BytesIO()
+        with zipfile.ZipFile(base_bytes, "w") as bzf:
+            bzf.writestr("AndroidManifest.xml", "<manifest package='com.test'></manifest>")
+            bzf.writestr("classes.dex", b"base dex")
+
+        split_bytes = io.BytesIO()
+        with zipfile.ZipFile(split_bytes, "w") as szf:
+            szf.writestr("AndroidManifest.xml", "<manifest package='com.test'></manifest>")
+            szf.writestr("lib/arm64-v8a/libtest.so", b"dummy so")
+
+        with zipfile.ZipFile(apks_path, "w") as azf:
+            azf.writestr("base.apk", base_bytes.getvalue())
+            azf.writestr("split_config.arm64_v8a.apk", split_bytes.getvalue())
+
+        unpack_dir = self.temp_out_dir / "split_extracted"
+        self.packager.unpack(apks_path, unpack_dir)
+
+        self.assertTrue((unpack_dir / "base" / "classes.dex").exists())
+        self.assertTrue((unpack_dir / "split_config.arm64_v8a" / "lib" / "arm64-v8a" / "libtest.so").exists())
+        self.assertTrue((unpack_dir / "AndroidManifest_readable.xml").exists())
+
+    @patch("apk_extractor.packager.extract_apk_label", return_value="Official Label")
+    def test_extract_official_label_renaming(self, mock_label):
+        def fake_pull(remote, local, device_id=None):
+            Path(local).write_bytes(b"dummy apk")
+
+        self.mock_adb.pull_file.side_effect = fake_pull
+        res = self.packager.extract(
+            package_name="com.test.app",
+            remote_paths=["/data/app/base.apk"],
+            output_dir=self.temp_out_dir,
+            app_name="Old_Label",
+        )
+        self.assertEqual(res.app_name, "Official Label")
+        self.assertEqual(res.output_path.name, "Official_Label.apk")
+        self.assertTrue(res.output_path.exists())
+
+    def test_generate_analysis_summary_with_sqlite_tables(self):
+        target_dir = self.temp_out_dir / "summary_sqlite"
+        target_dir.mkdir(parents=True)
+        (target_dir / "AndroidManifest.xml").write_text("<manifest package='com.test'></manifest>", encoding="utf-8")
+        (target_dir / "classes.dex").write_bytes(b"code")
+
+        with patch("apk_extractor.packager.extract_sqlite_schema_from_dir", return_value={
+            "total_tables": 2,
+            "tables": {"accounts": ["id", "name"], "transactions": ["id", "amount"]},
+            "raw_statements": ["CREATE TABLE accounts(id INT, name TEXT);", "CREATE TABLE transactions(id INT, amount REAL);"],
+        }):
+            self.packager.generate_analysis_summary(target_dir, "SqliteApp", "com.test.sqlite")
+            data = json.loads((target_dir / "analysis_info.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["sqlite_tables_count"], 2)
+            self.assertTrue((target_dir / "sqlite_schema.json").exists())
+            self.assertTrue((target_dir / "sqlite_schema.sql").exists())
+            self.assertTrue((target_dir / "README_ANALISIS.txt").exists())
+            readme_text = (target_dir / "README_ANALISIS.txt").read_text(encoding="utf-8")
+            self.assertIn("2 tabel terdeteksi", readme_text)
+
+    def test_cleanup_orphan_staging_temporary_marker_files(self):
+        from apk_extractor.packager import _cleanup_orphan_staging, _target_digest
+        target = self.temp_out_dir / "marker_cleanup_app"
+        digest = _target_digest(target)
+        tmp_marker = self.temp_out_dir / f".apkx_swap_{digest}.json.tmp_test_123"
+        tmp_marker.touch()
+        old_time = time.time() - 200000
+        os.utime(tmp_marker, (old_time, old_time))
+
+        _cleanup_orphan_staging(target, max_age_seconds=86400)
+        self.assertFalse(tmp_marker.exists())
+
+    def test_recover_interrupted_swap_corrupt_marker(self):
+        from apk_extractor.packager import _recover_interrupted_swap, _swap_marker_path
+        target = self.temp_out_dir / "corrupt_marker_app"
+        marker = _swap_marker_path(target)
+        marker.write_text("invalid json content {{{", encoding="utf-8")
+
+        # Calling _recover_interrupted_swap should not raise exception
+        _recover_interrupted_swap(target)
 
 
 if __name__ == "__main__":

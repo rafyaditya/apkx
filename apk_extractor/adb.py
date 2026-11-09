@@ -713,6 +713,81 @@ class ADBManager:
         except Exception:
             return []
 
+    def _send_shell_text(
+        self,
+        text: str,
+        device_id: Optional[str] = None,
+        timeout: int = 8,
+    ) -> bool:
+        escaped = text.replace("\\", "\\\\")
+        for ch in (
+            '"', "'", "&", "|", ";", "$", "`", "<", ">",
+            "(", ")", "*", "?", "[", "]", "{", "}", "~", "#", "!",
+        ):
+            escaped = escaped.replace(ch, f"\\{ch}")
+
+        cmd = self._build_base_cmd(device_id)
+        cmd.extend(["shell", "input", "text", escaped])
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            return proc.returncode == 0
+        except (subprocess.SubprocessError, OSError):
+            return False
+
+    def _send_keyevent(
+        self,
+        keycode: int,
+        device_id: Optional[str] = None,
+        timeout: int = 5,
+    ) -> bool:
+        cmd = self._build_base_cmd(device_id)
+        cmd.extend(["shell", "input", "keyevent", str(keycode)])
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            return proc.returncode == 0
+        except (subprocess.SubprocessError, OSError):
+            return False
+
+    def _send_text_with_literal_percent_s(
+        self,
+        line: str,
+        device_id: Optional[str] = None,
+    ) -> bool:
+        chunks = line.split("%s")
+        ok = True
+
+        for idx, chunk in enumerate(chunks):
+            if chunk:
+                if not self._send_shell_text(
+                    chunk.replace(" ", "%s"),
+                    device_id,
+                ):
+                    ok = False
+
+            if idx < len(chunks) - 1:
+                if not self._send_shell_text("%", device_id):
+                    ok = False
+                if not self._send_shell_text("s", device_id):
+                    ok = False
+
+        return ok
+
     def input_interact(
         self,
         action: str,
@@ -720,7 +795,7 @@ class ADBManager:
         y: Optional[int] = None,
         keycode: Optional[int] = None,
         text: Optional[str] = None,
-        swipe_coords: Optional[Tuple[int, int, int, int]] = None,
+        swipe_coords: Optional[Tuple[int, ...]] = None,
         device_id: Optional[str] = None,
     ) -> bool:
         """
@@ -747,39 +822,30 @@ class ADBManager:
         elif act_clean == "text":
             if text is None:
                 return False
-            # Normalisasi \r\n dan \r ke \n
-            normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
-            # Jika teks memiliki newline, kirim per baris dengan keyevent 66 (Enter)
-            lines = normalized_text.split("\n")
+
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            lines = normalized.split("\n")
             success = True
+
             for i, line in enumerate(lines):
                 if line:
-                    safe_text = line.replace("\\", "\\\\")
-                    # Escaping % literal agar tidak bentrok dengan representasi spasi %s di shell/Android
-                    safe_text = safe_text.replace("%", "\\%")
-                    safe_text = safe_text.replace(" ", "%s")
-                    for ch in (
-                        '"', "'", "&", "|", ";", "$", "`", "<", ">",
-                        "(", ")", "*", "?", "[", "]", "{", "}", "~", "#", "!"
-                    ):
-                        safe_text = safe_text.replace(ch, f"\\{ch}")
-                    sub_cmd = self._build_base_cmd(device_id)
-                    sub_cmd.extend(["shell", "input", "text", safe_text])
-                    try:
-                        p = subprocess.run(sub_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8, check=False)
-                        if p.returncode != 0:
+                    if "%s" in line:
+                        if not self._send_text_with_literal_percent_s(
+                            line,
+                            device_id,
+                        ):
                             success = False
-                    except Exception:
-                        success = False
+                    else:
+                        if not self._send_shell_text(
+                            line.replace(" ", "%s"),
+                            device_id,
+                        ):
+                            success = False
+
                 if i < len(lines) - 1:
-                    enter_cmd = self._build_base_cmd(device_id)
-                    enter_cmd.extend(["shell", "input", "keyevent", "66"])
-                    try:
-                        p_enter = subprocess.run(enter_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, check=False)
-                        if p_enter.returncode != 0:
-                            success = False
-                    except Exception:
+                    if not self._send_keyevent(66, device_id):
                         success = False
+
             return success
         elif act_clean == "swipe":
             if not swipe_coords or len(swipe_coords) < 4:
@@ -907,7 +973,7 @@ class ADBManager:
         """
         Retrieves the package name, activity class, and PID of the foreground window on device.
         """
-        info = {
+        info: Dict[str, Any] = {
             "package_name": "",
             "activity_name": "",
             "component": "",
@@ -930,9 +996,10 @@ class ADBManager:
         except Exception:
             pass
 
-        if info["package_name"]:
+        pkg = str(info.get("package_name") or "")
+        if pkg:
             cmd_pid = self._build_base_cmd(device_id)
-            cmd_pid.extend(["shell", "pidof", info["package_name"]])
+            cmd_pid.extend(["shell", "pidof", pkg])
             try:
                 res_pid = subprocess.run(cmd_pid, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=4, check=False)
                 if res_pid.returncode == 0 and res_pid.stdout.strip():
