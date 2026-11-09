@@ -112,11 +112,13 @@ def create_mcp_server() -> Any:
 
     @server.tool()
     def apkx_list_apps(
-        device_id: Optional[str] = None,
+        query: Optional[str] = None,
         include_system_apps: bool = False,
+        device_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Lists installed packages on the connected Android device, automatically resolved to human-friendly app names.
+        Supports case-insensitive substring search via 'query'.
         """
         adb.ensure_installed()
         ready, code, detail = adb.check_device_ready(device_id=device_id)
@@ -128,11 +130,26 @@ def create_mcp_server() -> Any:
                 "troubleshooting": detail.get("troubleshooting", []),
             }]
 
-        packages = adb.list_packages(
-            device_id=device_id,
-            third_party_only=not include_system_apps,
-            system_only=False,
-        )
+        try:
+            packages = adb.list_packages(
+                device_id=device_id,
+                third_party_only=not include_system_apps,
+                system_only=False,
+                query=query,
+            )
+        except ValueError as e:
+            return [{
+                "status": "error",
+                "code": "INVALID_ARGUMENT",
+                "message": str(e),
+            }]
+        except ADBError as e:
+            return [{
+                "status": "error",
+                "code": "ADB_ERROR",
+                "message": str(e),
+            }]
+
         apps = resolve_apps(adb, packages, device_id=device_id)
         return [{"app_name": a.app_name, "package_name": a.package_name} for a in apps]
 
@@ -624,11 +641,16 @@ def create_mcp_server() -> Any:
         keycode: Optional[int] = None,
         text: Optional[str] = None,
         swipe_coords: Optional[List[int]] = None,
+        duration_ms: Optional[int] = None,
+        count: Optional[int] = None,
         device_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Simulates user input on the device:
         - action='tap': requires x, y coordinates
+        - action='long_press': requires x, y coordinates, optional duration_ms (default 1000, 200-5000ms)
+        - action='backspace': deletes characters, optional count (default 1, 1-50)
+        - action='recent_apps': opens task switcher overview (KEYCODE_APP_SWITCH / 187)
         - action='back': presses Android Back button (KEYCODE_BACK / 4)
         - action='home': presses Android Home button
         - action='enter': presses Enter key
@@ -652,6 +674,8 @@ def create_mcp_server() -> Any:
             keycode=keycode,
             text=text,
             swipe_coords=coords_tuple,
+            duration_ms=duration_ms,
+            count=count,
             device_id=device_id,
         )
         return {
@@ -694,16 +718,20 @@ def create_mcp_server() -> Any:
         return adb.ensure_device_awake(pin=pin, stay_on=stay_on, device_id=device_id)
 
     @server.tool()
-    def apkx_get_current_screen(device_id: Optional[str] = None) -> Dict[str, Any]:
+    def apkx_get_current_screen(
+        expected_package: Optional[str] = None,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Returns the active top-level package name, Activity class name, component,
-        and running process PID currently displayed on the device.
+        running process PID, and overlay details currently displayed on the device.
+        If expected_package is provided, evaluates whether the target app is in the foreground.
         """
         adb.ensure_installed()
         ready, code, detail = adb.check_device_ready(device_id=device_id)
         if not ready:
             return detail
-        return adb.get_current_screen(device_id=device_id)
+        return adb.get_screen_state(expected_package=expected_package, device_id=device_id)
 
     @server.tool()
     def apkx_get_app_logs(
@@ -785,13 +813,15 @@ def create_mcp_server() -> Any:
     def apkx_install_apk(
         apk_path: str,
         reinstall: bool = True,
-        grant_permissions: bool = True,
-        allow_downgrade: bool = True,
+        grant_permissions: bool = False,
+        allow_downgrade: bool = False,
+        verify: bool = True,
         device_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Installs a local APK file (.apk or .apks) onto the connected Android device using ADB.
-        Automatically handles reinstall (-r), runtime permission grants (-g), and downgrade allowance (-d).
+        Default does not force-grant runtime permissions (-g) or allow downgrade (-d) for clean release handoffs.
+        Enriches response with package_name, version_name, version_code, and debuggable status.
         Diagnoses common issues (e.g. signature mismatch / UPDATE_INCOMPATIBLE).
         """
         adb.ensure_installed()
@@ -803,6 +833,7 @@ def create_mcp_server() -> Any:
             reinstall=reinstall,
             grant_permissions=grant_permissions,
             allow_downgrade=allow_downgrade,
+            verify=verify,
             device_id=device_id,
         )
         return res_detail
@@ -827,6 +858,175 @@ def create_mcp_server() -> Any:
             device_id=device_id,
         )
         return res_detail
+
+    @server.tool()
+    def apkx_diagnostics(
+        action: str,
+        target: Optional[str] = None,
+        filter_text: Optional[str] = None,
+        max_output_chars: int = 16_000,
+        allow_truncate: bool = True,
+        timeout: int = 15,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Executes strictly controlled, read-only diagnostic inspections on the connected device.
+        Applies action allowlist, strict input regex validation, and output truncation caps.
+        Only allowed actions: getprop, wm_size, wm_density, pidof, ps, dumpsys_window_focus, dumpsys_package_version.
+        Raw shell execution is strictly blocked. Use this tool before considering manual ADB.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        try:
+            return adb.diagnostics(
+                action=action,
+                target=target,
+                filter_text=filter_text,
+                max_output_chars=max_output_chars,
+                allow_truncate=allow_truncate,
+                timeout=timeout,
+                device_id=device_id,
+            )
+        except TimeoutError:
+            return {"status": "error", "code": "TIMEOUT", "message": "Batas waktu eksekusi diagnostik terlampaui."}
+        except ValueError as e:
+            return {"status": "error", "code": "INVALID_ARGUMENT", "message": str(e)}
+        except ADBError as e:
+            return {"status": "error", "code": "ADB_ERROR", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "code": "UNKNOWN", "message": str(e)}
+
+    @server.tool()
+    def apkx_force_stop_app(
+        package_name: str,
+        allow_system: bool = False,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Force-stops an application package or background overlay and verifies termination.
+        Protected against killing core system packages (systemui, phone, settings, android).
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        try:
+            return adb.force_stop_app(
+                package_name=package_name,
+                allow_system=allow_system,
+                device_id=device_id,
+            )
+        except ValueError as e:
+            return {"status": "error", "code": "INVALID_ARGUMENT", "message": str(e)}
+        except ADBError as e:
+            return {"status": "error", "code": "ADB_ERROR", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "code": "UNKNOWN", "message": str(e)}
+
+    @server.tool()
+    def apkx_find_ui_element(
+        query: str,
+        search_by: str = "text",
+        match_mode: str = "contains",
+        case_sensitive: bool = False,
+        max_results: int = 20,
+        include_disabled: bool = True,
+        clickable_only: bool = False,
+        retries: int = 2,
+        retry_delay_ms: int = 500,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Searches UI hierarchy for matching elements by text, resource_id, content_desc, or class.
+        Returns calculated center click coordinates ([center_x, center_y]) and bounding boxes.
+        Distinguishes NOT_FOUND from UI_DUMP_FAILED.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        try:
+            return adb.find_ui_element(
+                query=query,
+                search_by=search_by,
+                match_mode=match_mode,
+                case_sensitive=case_sensitive,
+                max_results=max_results,
+                include_disabled=include_disabled,
+                clickable_only=clickable_only,
+                retries=retries,
+                retry_delay_ms=retry_delay_ms,
+                device_id=device_id,
+            )
+        except ValueError as e:
+            return {"status": "error", "code": "INVALID_ARGUMENT", "message": str(e)}
+        except ADBError as e:
+            return {"status": "error", "code": "ADB_ERROR", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "code": "UNKNOWN", "message": str(e)}
+
+    @server.tool()
+    def apkx_verify_install(
+        package_name: str,
+        expect_release: Optional[bool] = True,
+        expected_version_name: Optional[str] = None,
+        expected_version_code: Optional[str] = None,
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Verifies package installation status, version codes, and DEBUGGABLE flag.
+        Enforces release gate (debuggable=false when expect_release=True).
+        Fails closed (verified=false) if status is unknown.
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        try:
+            return adb.verify_installed_package(
+                package_name=package_name,
+                expect_release=expect_release,
+                expected_version_name=expected_version_name,
+                expected_version_code=expected_version_code,
+                device_id=device_id,
+            )
+        except ValueError as e:
+            return {"status": "error", "code": "INVALID_ARGUMENT", "message": str(e)}
+        except ADBError as e:
+            return {"status": "error", "code": "ADB_ERROR", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "code": "UNKNOWN", "message": str(e)}
+
+    @server.tool()
+    def apkx_grant_permission(
+        package_name: str,
+        permission: str,
+        action: str = "grant",
+        device_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Dynamically grants or revokes a runtime permission on Android 6.0+ (API 23+).
+        Validates manifest declaration before granting. Normalizes short names (e.g. CAMERA -> android.permission.CAMERA).
+        """
+        adb.ensure_installed()
+        ready, code, detail = adb.check_device_ready(device_id=device_id)
+        if not ready:
+            return detail
+        try:
+            return adb.grant_runtime_permission(
+                package_name=package_name,
+                permission=permission,
+                action=action,
+                device_id=device_id,
+            )
+        except ValueError as e:
+            return {"status": "error", "code": "INVALID_ARGUMENT", "message": str(e)}
+        except ADBError as e:
+            return {"status": "error", "code": "ADB_ERROR", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "code": "UNKNOWN", "message": str(e)}
 
     return server
 

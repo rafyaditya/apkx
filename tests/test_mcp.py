@@ -1,15 +1,27 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+from apk_extractor.adb import ADBError
 from apk_extractor.mcp_server import create_mcp_server
 
 
 class TestMCPServer(unittest.TestCase):
     def setUp(self):
         self.server = create_mcp_server()
+
+    def _parse_res(self, res):
+        if hasattr(res, "structured_content") and isinstance(res.structured_content, dict) and "result" in res.structured_content:
+            return res.structured_content["result"]
+        if hasattr(res, "content") and res.content:
+            try:
+                return json.loads(res.content[0].text)
+            except Exception:
+                return res.content[0].text
+        return res
 
     def test_registered_tools(self):
         async def run_check():
@@ -39,7 +51,13 @@ class TestMCPServer(unittest.TestCase):
                 "apkx_toggle_night_mode",
                 "apkx_install_apk",
                 "apkx_uninstall_app",
+                "apkx_diagnostics",
+                "apkx_force_stop_app",
+                "apkx_find_ui_element",
+                "apkx_verify_install",
+                "apkx_grant_permission",
             ]
+            self.assertEqual(len(tool_names), 28)
             for exp in expected:
                 self.assertIn(exp, tool_names)
 
@@ -188,7 +206,7 @@ class TestMCPServer(unittest.TestCase):
 
     @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
     @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {"serial": "mock_device"}))
-    @patch("apk_extractor.adb.ADBManager.get_current_screen")
+    @patch("apk_extractor.adb.ADBManager.get_screen_state")
     def test_get_current_screen_tool(self, mock_scr, mock_ready, mock_ensured):
         mock_scr.return_value = {"package_name": "com.test", "activity_name": ".MainActivity", "pid": 999}
         async def run_call():
@@ -339,6 +357,7 @@ class TestMCPServer(unittest.TestCase):
                 device_id=None,
                 third_party_only=False,
                 system_only=False,
+                query=None,
             )
 
         asyncio.run(run_call())
@@ -746,7 +765,231 @@ class TestMCPServer(unittest.TestCase):
             self.assertIn("offline", str(res10))
             res11 = await self.server.call_tool("apkx_get_app_logs", {"package_name": "com.test"})
             self.assertIn("offline", str(res11))
+            res12 = await self.server.call_tool("apkx_diagnostics", {"action": "getprop"})
+            self.assertIn("offline", str(res12))
+            res13 = await self.server.call_tool("apkx_force_stop_app", {"package_name": "com.test"})
+            self.assertIn("offline", str(res13))
+            res14 = await self.server.call_tool("apkx_find_ui_element", {"query": "Save"})
+            self.assertIn("offline", str(res14))
+            res15 = await self.server.call_tool("apkx_verify_install", {"package_name": "com.test"})
+            self.assertIn("offline", str(res15))
+            res16 = await self.server.call_tool("apkx_grant_permission", {"package_name": "com.test", "permission": "CAMERA"})
+            self.assertIn("offline", str(res16))
         asyncio.run(run_not_ready())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.list_packages")
+    @patch("apk_extractor.app_names.resolve_apps")
+    def test_list_apps_with_query(self, mock_resolve, mock_list, mock_ready, mock_ensured):
+        from apk_extractor.app_names import AppInfo
+        mock_list.return_value = ["com.example.expense"]
+        mock_resolve.return_value = [AppInfo(package_name="com.example.expense", app_name="Expense Tracker")]
+
+        async def run_list():
+            # Success with query
+            raw_res = await self.server.call_tool("apkx_list_apps", {"query": "expense"})
+            res = self._parse_res(raw_res)
+            self.assertIsInstance(res, list)
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["package_name"], "com.example.expense")
+            mock_list.assert_called_with(device_id=None, third_party_only=True, system_only=False, query="expense")
+
+            # Error with invalid query -> returns [error_dict]
+            mock_list.side_effect = ValueError("query filter tidak valid")
+            raw_err = await self.server.call_tool("apkx_list_apps", {"query": "invalid;q"})
+            res_err = self._parse_res(raw_err)
+            self.assertIsInstance(res_err, list)
+            self.assertEqual(res_err[0]["code"], "INVALID_ARGUMENT")
+
+        asyncio.run(run_list())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.get_screen_state")
+    def test_get_current_screen_with_expected(self, mock_state, mock_ready, mock_ensured):
+        mock_state.return_value = {
+            "status": "success",
+            "code": "OK",
+            "package_name": "com.example.app",
+            "activity_name": ".MainActivity",
+            "is_target_foreground": True,
+            "is_overlay_active": False,
+        }
+
+        async def run_screen():
+            raw_res = await self.server.call_tool("apkx_get_current_screen", {"expected_package": "com.example.app"})
+            res = self._parse_res(raw_res)
+            self.assertIsInstance(res, dict)
+            self.assertTrue(res["is_target_foreground"])
+            mock_state.assert_called_with(expected_package="com.example.app", device_id=None)
+
+        asyncio.run(run_screen())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.input_interact")
+    def test_interact_new_actions(self, mock_interact, mock_ready, mock_ensured):
+        mock_interact.return_value = True
+
+        async def run_interact():
+            # long_press
+            res_lp = self._parse_res(await self.server.call_tool("apkx_interact", {"action": "long_press", "x": 100, "y": 200, "duration_ms": 1500}))
+            self.assertEqual(res_lp["status"], "success")
+            mock_interact.assert_called_with(
+                action="long_press", x=100, y=200, keycode=None, text=None, swipe_coords=None, duration_ms=1500, count=None, device_id=None
+            )
+
+            # backspace
+            res_bs = self._parse_res(await self.server.call_tool("apkx_interact", {"action": "backspace", "count": 3}))
+            self.assertEqual(res_bs["status"], "success")
+
+            # recent_apps
+            res_ra = self._parse_res(await self.server.call_tool("apkx_interact", {"action": "recent_apps"}))
+            self.assertEqual(res_ra["status"], "success")
+
+        asyncio.run(run_interact())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.install_apk")
+    def test_install_apk_enriched_and_defaults(self, mock_install, mock_ready, mock_ensured):
+        mock_install.return_value = (
+            True,
+            "SUCCESS",
+            {
+                "status": "success",
+                "code": "OK",
+                "package_name": "com.test.release",
+                "version_name": "1.0.0",
+                "version_code": "1",
+                "debuggable": False,
+                "verification": "verified",
+            },
+        )
+
+        async def run_install():
+            raw_res = await self.server.call_tool("apkx_install_apk", {"apk_path": "release.apk"})
+            res = self._parse_res(raw_res)
+            self.assertIsInstance(res, dict)
+            self.assertEqual(res["code"], "OK")
+            self.assertEqual(res["package_name"], "com.test.release")
+            self.assertFalse(res["debuggable"])
+            mock_install.assert_called_with(
+                apk_path="release.apk",
+                reinstall=True,
+                grant_permissions=False,
+                allow_downgrade=False,
+                verify=True,
+                device_id=None,
+            )
+
+        asyncio.run(run_install())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.diagnostics")
+    def test_diagnostics_tool(self, mock_diag, mock_ready, mock_ensured):
+        mock_diag.return_value = {
+            "status": "success",
+            "code": "OK",
+            "action": "getprop",
+            "result": {"properties": {"ro.product.model": "Pixel"}},
+            "untrusted_content": True,
+        }
+
+        async def run_diag():
+            res = self._parse_res(await self.server.call_tool("apkx_diagnostics", {"action": "getprop"}))
+            self.assertEqual(res["status"], "success")
+            self.assertEqual(res["code"], "OK")
+
+            # Error boundary tests
+            mock_diag.side_effect = TimeoutError()
+            res_to = self._parse_res(await self.server.call_tool("apkx_diagnostics", {"action": "getprop"}))
+            self.assertEqual(res_to["code"], "TIMEOUT")
+
+            mock_diag.side_effect = ValueError("Aksi diagnostik tidak valid")
+            res_val = self._parse_res(await self.server.call_tool("apkx_diagnostics", {"action": "bad_act"}))
+            self.assertEqual(res_val["code"], "INVALID_ARGUMENT")
+
+            mock_diag.side_effect = ADBError("ADB communication failed")
+            res_adb = self._parse_res(await self.server.call_tool("apkx_diagnostics", {"action": "getprop"}))
+            self.assertEqual(res_adb["code"], "ADB_ERROR")
+
+            mock_diag.side_effect = Exception("General crash")
+            res_unk = self._parse_res(await self.server.call_tool("apkx_diagnostics", {"action": "getprop"}))
+            self.assertEqual(res_unk["code"], "UNKNOWN")
+
+        asyncio.run(run_diag())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.force_stop_app")
+    def test_force_stop_app_tool(self, mock_stop, mock_ready, mock_ensured):
+        mock_stop.return_value = {"status": "success", "code": "OK", "is_running": False}
+
+        async def run_stop():
+            res = self._parse_res(await self.server.call_tool("apkx_force_stop_app", {"package_name": "com.test.app"}))
+            self.assertEqual(res["status"], "success")
+
+            mock_stop.side_effect = ValueError("Package invalid")
+            res_err = self._parse_res(await self.server.call_tool("apkx_force_stop_app", {"package_name": "invalid;"}))
+            self.assertEqual(res_err["code"], "INVALID_ARGUMENT")
+
+        asyncio.run(run_stop())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.find_ui_element")
+    def test_find_ui_element_tool(self, mock_find, mock_ready, mock_ensured):
+        mock_find.return_value = {"status": "success", "code": "OK", "matches": [{"text": "Save"}]}
+
+        async def run_find():
+            res = self._parse_res(await self.server.call_tool("apkx_find_ui_element", {"query": "Save"}))
+            self.assertEqual(res["status"], "success")
+
+            mock_find.return_value = {"status": "error", "code": "NOT_FOUND", "matches": []}
+            res_nf = self._parse_res(await self.server.call_tool("apkx_find_ui_element", {"query": "Save"}))
+            self.assertEqual(res_nf["code"], "NOT_FOUND")
+
+            mock_find.return_value = {"status": "error", "code": "UI_DUMP_FAILED", "matches": []}
+            res_fail = self._parse_res(await self.server.call_tool("apkx_find_ui_element", {"query": "Save"}))
+            self.assertEqual(res_fail["code"], "UI_DUMP_FAILED")
+
+        asyncio.run(run_find())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.verify_installed_package")
+    def test_verify_install_tool(self, mock_verify, mock_ready, mock_ensured):
+        mock_verify.return_value = {"status": "success", "code": "OK", "verified": True, "debuggable": False}
+
+        async def run_v():
+            res = self._parse_res(await self.server.call_tool("apkx_verify_install", {"package_name": "com.test.app", "expect_release": True}))
+            self.assertTrue(res["verified"])
+            self.assertFalse(res["debuggable"])
+
+            mock_verify.return_value = {"status": "error", "code": "DEBUGGABLE_MISMATCH", "verified": False}
+            res_mismatch = self._parse_res(await self.server.call_tool("apkx_verify_install", {"package_name": "com.test.app", "expect_release": True}))
+            self.assertEqual(res_mismatch["code"], "DEBUGGABLE_MISMATCH")
+
+        asyncio.run(run_v())
+
+    @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
+    @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))
+    @patch("apk_extractor.adb.ADBManager.grant_runtime_permission")
+    def test_grant_permission_tool(self, mock_grant, mock_ready, mock_ensured):
+        mock_grant.return_value = {"status": "success", "code": "OK", "granted": True}
+
+        async def run_gp():
+            res = self._parse_res(await self.server.call_tool("apkx_grant_permission", {"package_name": "com.test.app", "permission": "CAMERA"}))
+            self.assertEqual(res["code"], "OK")
+
+            mock_grant.side_effect = ValueError("Invalid permission")
+            res_inv = self._parse_res(await self.server.call_tool("apkx_grant_permission", {"package_name": "com.test.app", "permission": ";bad"}))
+            self.assertEqual(res_inv["code"], "INVALID_ARGUMENT")
+
+        asyncio.run(run_gp())
 
     @patch("apk_extractor.adb.ADBManager.ensure_installed", return_value=True)
     @patch("apk_extractor.adb.ADBManager.check_device_ready", return_value=(True, "READY", {}))

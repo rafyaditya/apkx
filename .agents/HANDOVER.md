@@ -1,4 +1,4 @@
-# 📋 PANDUAN LENGKAP HANDOVER AGENT — PROYEK APKX (v1.4.3)
+# 📋 PANDUAN LENGKAP HANDOVER AGENT — PROYEK APKX (v1.4.4)
 
 > **Untuk Agent Baru**: Dokumen ini merangkum seluruh konteks historis, keputusan arsitektur, hasil audit independen, status pengujian, dan instruksi tindakan konkret untuk melanjutkan pengembangan tool `apkx` tanpa kehilangan arah atau mengulang kesalahan masa lalu.
 
@@ -7,7 +7,7 @@
 ## 1. 📌 Identitas & Lingkungan Proyek
 
 * **Repositori**: `$REPO_ROOT` (mis. `~/projects/apkx`)
-* **Remote Git**: `https://github.com/rafyaditya/apkx.git` (Cabang rilis: `release/v1.4.3`, Cabang utama: `main`)
+* **Remote Git**: `https://github.com/rafyaditya/apkx.git` (Cabang rilis: `release/v1.4.4`, Cabang utama: `main`)
 * **Python Environment (pipx)**: `$PIPX_VENV/bin/python` (mis. `~/.local/share/pipx/venvs/apkx/bin/python`)
 * **Linter Executable**: `$RUFF` (mis. `~/.local/share/pipx/venvs/apkx/bin/ruff`)
 * **Test Suite Runner**: `pytest --cov=apk_extractor --cov-report=term tests/`
@@ -52,6 +52,29 @@
    - Modul `logger.py` terpusat dengan `NullHandler`.
    - Coverage pengujian komprehensif mencapai ≥ 85% dengan 275+ unit test.
    - Dual-job CI workflow: matrix testing (3.10–3.14) dengan mypy dan coverage threshold, disusul package build, twine check, dan fresh venv smoke testing.
+
+### Fase 5: Rilis v1.4.4 (Zero-Raw-ADB, 2-Stage Deployment Pipeline & Play Protect Safety)
+1. **Zero-Raw-ADB Enforced**:
+   - Menghapus instruksi terminal mentah `adb` di `SKILL.md` (baris 112, 123, 204).
+   - Menolak proposal `apkx_run_adb` (mencegah arbitrary shell injection, prompt injection, dan bypass perbaikan).
+   - Menyediakan `apkx_diagnostics` berbasis allowlist ketat 7 aksi (`battery`, `meminfo`, `getprop`, `disk`, `display`, `package_path`, `network`) dengan sanitasi regex, limit output 16KB/64KB, dan penanda `untrusted_content: True`.
+2. **2-Stage Deployment Pipeline**:
+   - Restrukturisasi SOP skill menjadi **Fase 7a: Pengujian Iteratif & Self-Healing (Debug APK)** dan **Fase 7b: Release Handoff Gate (Release APK)**.
+   - Menyediakan tool `apkx_verify_install` untuk memvalidasi bahwa aplikasi akhir di perangkat adalah build release (`debuggable == False`), mencegah kelalaian tertinggalnya APK debug.
+   - Menyesuaikan default `apkx_install_apk`: `grant_permissions=False`, `allow_downgrade=False`, `verify=True` demi keamanan rilis produksi.
+3. **Play Protect Safety Protocol**:
+   - Mendeteksi dialog / transparent overlay `com.android.vending.transparentmainactivity.HsdpAlias` via `apkx_get_current_screen(expected_package=...)`.
+   - Menemukan tombol "More details" dan "Install anyway" secara semantik via `apkx_find_ui_element()`.
+   - Menutup overlay nakal secara aman via `apkx_force_stop_app("com.android.vending")` tanpa mengubah pengaturan global perangkat (`settings put`).
+4. **Ekspansi Toolkit MCP (23 → 28 Tools)**:
+   - 5 Tool Baru: `apkx_diagnostics`, `apkx_force_stop_app`, `apkx_find_ui_element`, `apkx_verify_install`, `apkx_grant_permission`.
+   - 5 Tool Diperkaya: `apkx_list_apps` (parameter `query`), `apkx_interact` (`long_press`, `backspace`, `recent_apps`), `apkx_get_current_screen` (`expected_package`), `apkx_install_apk` (metadata & safety defaults), `apkx_dump_ui_hierarchy` (distinksi error & SD card XML isolasi).
+5. **Standarisasi Kontrak Respons & 21 Canonical Error Codes**:
+   - Kontrak konsisten: Flat `Dict[str, Any]` (tanpa nested `data`), `List[Dict[str, Any]]` untuk `apkx_list_apps`, dan `str` untuk 3 pembaca konten teks.
+   - 21 canonical error codes dengan pesan ramah pengguna dan aksi perbaikan.
+6. **Integritas Skill & Proteksi Testing**:
+   - Verifikasi byte-identical tiga salinan `SKILL.md` (.agents, data, ~/.gemini).
+   - Pengujian `sync_antigravity_skill` menggunakan fixture `tempfile.TemporaryDirectory` terisolasi untuk melindungi lingkungan pengguna.
 
 ---
 

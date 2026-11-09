@@ -744,6 +744,515 @@ class TestADBAdditionalFeatures(unittest.TestCase):
             self.assertEqual(res2["status"], "ready")
             self.assertIn("PIN", res2["message"])
 
+    @patch("subprocess.run")
+    def test_list_packages_query_filter(self, mock_run):
+        mock_proc = MagicMock(returncode=0, stdout="package:com.example.expense\npackage:com.other.app\npackage:com.example.notes\n")
+        mock_run.return_value = mock_proc
+        manager = ADBManager(adb_path="mock_adb")
+
+        # No query -> all
+        all_pkgs = manager.list_packages()
+        self.assertEqual(len(all_pkgs), 3)
+
+        # Query filter -> case-insensitive substring
+        filtered = manager.list_packages(query="EXPENSE")
+        self.assertEqual(filtered, ["com.example.expense"])
+
+        filtered_ex = manager.list_packages(query="example")
+        self.assertEqual(filtered_ex, ["com.example.expense", "com.example.notes"])
+
+        # Invalid query validation
+        with self.assertRaises(ValueError):
+            manager.list_packages(query="invalid;query")
+
+    @patch("subprocess.run")
+    def test_get_package_quick_info_debuggable_and_flags(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+        with patch.object(manager, "get_package_apk_paths", return_value=["/data/app/com.test.app/base.apk"]):
+            # Case 1: Debuggable true
+            mock_proc_dbg = MagicMock(
+                returncode=0,
+                stdout="versionName=1.2.3\nversionCode=45\npkgFlags=[ DEBUGGABLE HAS_CODE ALLOW_CLEAR_USER_DATA ]\n",
+            )
+            mock_run.return_value = mock_proc_dbg
+            info_dbg = manager.get_package_quick_info("com.test.app")
+            self.assertTrue(info_dbg["debuggable"])
+            self.assertIn("DEBUGGABLE", info_dbg["flags"])
+
+            # Case 2: Release (debuggable false)
+            mock_proc_rel = MagicMock(
+                returncode=0,
+                stdout="versionName=2.0.0\nversionCode=50\nflags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ]\n",
+            )
+            mock_run.return_value = mock_proc_rel
+            info_rel = manager.get_package_quick_info("com.test.app")
+            self.assertFalse(info_rel["debuggable"])
+
+            # Case 3: No flags line
+            mock_proc_none = MagicMock(returncode=0, stdout="versionName=1.0\n")
+            mock_run.return_value = mock_proc_none
+            info_none = manager.get_package_quick_info("com.test.app")
+            self.assertIsNone(info_none["debuggable"])
+
+    @patch("subprocess.run")
+    def test_input_interact_new_actions_and_bounds(self, mock_run):
+        mock_proc = MagicMock(returncode=0, stdout="")
+        mock_run.return_value = mock_proc
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Bounds checking with mocked screen size
+        with patch.object(manager, "get_screen_size", return_value=(1080, 2400)):
+            # Valid tap
+            self.assertTrue(manager.input_interact("tap", x=500, y=1000))
+            # Out of bounds tap
+            self.assertFalse(manager.input_interact("tap", x=-10, y=100))
+            self.assertFalse(manager.input_interact("tap", x=100, y=-5))
+            self.assertFalse(manager.input_interact("tap", x=1200, y=1000))
+            self.assertFalse(manager.input_interact("tap", x=500, y=2500))
+
+            # long_press action
+            self.assertTrue(manager.input_interact("long_press", x=500, y=1000, duration_ms=1500))
+            self.assertFalse(manager.input_interact("long_press", x=500, y=1000, duration_ms=100))  # < 200 ms
+            self.assertFalse(manager.input_interact("long_press", x=500, y=1000, duration_ms=6000))  # > 5000 ms
+            self.assertFalse(manager.input_interact("long_press", x=None, y=1000))
+
+            # backspace action
+            self.assertTrue(manager.input_interact("backspace", count=3))
+            self.assertFalse(manager.input_interact("backspace", count=0))
+            self.assertFalse(manager.input_interact("backspace", count=55))
+
+            # recent_apps action
+            self.assertTrue(manager.input_interact("recent_apps"))
+
+            # swipe action bounds validation
+            self.assertTrue(manager.input_interact("swipe", swipe_coords=(100, 200, 300, 400, 300)))
+            self.assertFalse(manager.input_interact("swipe", swipe_coords=(-1, 200, 300, 400)))
+            self.assertFalse(manager.input_interact("swipe", swipe_coords=(100, 200, 1500, 400)))
+
+    @patch("subprocess.run")
+    def test_get_screen_state_and_overlay_classification(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Case 1: Target app in foreground without overlay
+        def side_effect_app(cmd, *args, **kwargs):
+            mock_proc = MagicMock(returncode=0)
+            if "dumpsys" in cmd and "window" in cmd:
+                mock_proc.stdout = "mCurrentFocus=Window{abc u0 com.example.app/com.example.app.MainActivity}\n"
+            elif "dumpsys" in cmd and "activities" in cmd:
+                mock_proc.stdout = "mResumedActivity: ActivityRecord{123 u0 com.example.app/.MainActivity t10}\n"
+            elif "pidof" in cmd:
+                mock_proc.stdout = "4567\n"
+            else:
+                mock_proc.stdout = ""
+            return mock_proc
+
+        mock_run.side_effect = side_effect_app
+        st = manager.get_screen_state(expected_package="com.example.app")
+        self.assertEqual(st["package_name"], "com.example.app")
+        self.assertEqual(st["activity_name"], "com.example.app.MainActivity")
+        self.assertEqual(st["focused_package"], "com.example.app")
+        self.assertEqual(st["overlay_type"], "none")
+        self.assertFalse(st["is_overlay_active"])
+        self.assertTrue(st["is_target_foreground"])
+        self.assertEqual(st["target_pid"], 4567)
+        self.assertTrue(st["target_running"])
+
+        # Case 2: Overlay active (Google Play Protect)
+        def side_effect_overlay(cmd, *args, **kwargs):
+            mock_proc = MagicMock(returncode=0)
+            if "dumpsys" in cmd and "window" in cmd:
+                mock_proc.stdout = "mCurrentFocus=Window{abc u0 com.android.vending/com.google.android.finsky.HsdpAlias}\n"
+            elif "dumpsys" in cmd and "activities" in cmd:
+                mock_proc.stdout = "topResumedActivity=ActivityRecord{123 u0 com.android.vending/.HsdpAlias t11}\n"
+            elif "pidof" in cmd:
+                mock_proc.stdout = "9999\n"
+            else:
+                mock_proc.stdout = ""
+            return mock_proc
+
+        mock_run.side_effect = side_effect_overlay
+        st_overlay = manager.get_screen_state(expected_package="com.example.app")
+        self.assertEqual(st_overlay["focused_package"], "com.android.vending")
+        self.assertEqual(st_overlay["overlay_type"], "play_protect")
+        self.assertTrue(st_overlay["is_overlay_active"])
+        self.assertEqual(st_overlay["overlay_package"], "com.android.vending")
+        self.assertFalse(st_overlay["is_target_foreground"])
+
+        # Case 3: Keyboard focused (should NOT be counted as active overlay)
+        def side_effect_keyboard(cmd, *args, **kwargs):
+            mock_proc = MagicMock(returncode=0)
+            if "dumpsys" in cmd and "window" in cmd:
+                mock_proc.stdout = "mCurrentFocus=Window{abc u0 com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME}\n"
+            else:
+                mock_proc.stdout = ""
+            return mock_proc
+
+        mock_run.side_effect = side_effect_keyboard
+        st_kb = manager.get_screen_state(expected_package="com.example.app")
+        self.assertEqual(st_kb["overlay_type"], "keyboard")
+        self.assertFalse(st_kb["is_overlay_active"])
+
+    @patch("subprocess.run")
+    def test_dump_ui_hierarchy_ex_and_find_ui_element(self, mock_run):
+        xml_content = (
+            '<hierarchy><node text="Simpan Transaksi" resource-id="com.example.app:id/btn_save" '
+            'content-desc="Tombol Simpan" class="android.widget.Button" clickable="true" enabled="true" '
+            'bounds="[100,500][400,600]"/>'
+            '<node text="Hapus Data" resource-id="com.example.app:id/btn_delete" '
+            'content-desc="Hapus" class="android.widget.Button" clickable="true" enabled="false" '
+            'bounds="[100,700][400,800]"/></hierarchy>'
+        )
+
+        def side_effect(cmd, *args, **kwargs):
+            mock_proc = MagicMock(returncode=0)
+            if "uiautomator" in cmd:
+                mock_proc.stdout = "UI hierchary dumped to: /sdcard/dump.xml"
+            elif "exec-out" in cmd and "cat" in cmd:
+                mock_proc.stdout = xml_content
+            else:
+                mock_proc.stdout = ""
+            return mock_proc
+
+        mock_run.side_effect = side_effect
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Test search by text contains
+        res = manager.find_ui_element(query="Simpan", search_by="text", match_mode="contains")
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["code"], "OK")
+        self.assertEqual(res["match_count"], 1)
+        match = res["matches"][0]
+        self.assertEqual(match["text"], "Simpan Transaksi")
+        self.assertEqual(match["center"], [250, 550])
+
+        # Test search by resource_id
+        res_id = manager.find_ui_element(query="btn_save", search_by="resource_id")
+        self.assertEqual(res_id["status"], "success")
+        self.assertEqual(res_id["match_count"], 1)
+
+        # Test search with include_disabled=False
+        res_disabled = manager.find_ui_element(query="Hapus", search_by="text", include_disabled=False)
+        self.assertEqual(res_disabled["status"], "error")
+        self.assertEqual(res_disabled["code"], "NOT_FOUND")
+
+        # Test search NOT_FOUND
+        res_not_found = manager.find_ui_element(query="ElemenTidakAda", search_by="text")
+        self.assertEqual(res_not_found["status"], "error")
+        self.assertEqual(res_not_found["code"], "NOT_FOUND")
+
+        # Test invalid arguments
+        with self.assertRaises(ValueError):
+            manager.find_ui_element(query="", search_by="text")
+        with self.assertRaises(ValueError):
+            manager.find_ui_element(query="test", search_by="invalid_mode")
+        with self.assertRaises(ValueError):
+            manager.find_ui_element(query="test", match_mode="invalid_match")
+
+        # Test UI_DUMP_FAILED
+        mock_proc_fail = MagicMock(returncode=1, stderr="could not get idle state", stdout="")
+        mock_run.side_effect = None
+        mock_run.return_value = mock_proc_fail
+        res_fail = manager.find_ui_element(query="test", retries=0)
+        self.assertEqual(res_fail["status"], "error")
+        self.assertEqual(res_fail["code"], "UI_DUMP_FAILED")
+
+    @patch("subprocess.run")
+    def test_verify_installed_package(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Case 1: Package not installed
+        with patch.object(manager, "get_package_apk_paths", return_value=[]):
+            res_not_found = manager.verify_installed_package("com.not.installed")
+            self.assertEqual(res_not_found["code"], "PACKAGE_NOT_FOUND")
+            self.assertFalse(res_not_found["verified"])
+
+        # Case 2: Release verified (debuggable=false)
+        with patch.object(manager, "get_package_apk_paths", return_value=["/data/app/com.test.app/base.apk"]):
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="versionName=1.0.0\nversionCode=10\npkgFlags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ]\n",
+            )
+            res_rel = manager.verify_installed_package("com.test.app", expect_release=True, expected_version_name="1.0.0")
+            self.assertEqual(res_rel["code"], "OK")
+            self.assertTrue(res_rel["verified"])
+            self.assertFalse(res_rel["debuggable"])
+
+            # Case 3: DEBUGGABLE_MISMATCH (expected release but got debuggable=true)
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="versionName=1.0.0\nversionCode=10\npkgFlags=[ DEBUGGABLE HAS_CODE ]\n",
+            )
+            res_mismatch = manager.verify_installed_package("com.test.app", expect_release=True)
+            self.assertEqual(res_mismatch["code"], "DEBUGGABLE_MISMATCH")
+            self.assertFalse(res_mismatch["verified"])
+
+            # Case 4: VERSION_MISMATCH
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="versionName=1.0.0\nversionCode=10\npkgFlags=[ HAS_CODE ]\n",
+            )
+            res_vm = manager.verify_installed_package("com.test.app", expect_release=True, expected_version_name="2.0.0")
+            self.assertEqual(res_vm["code"], "VERSION_MISMATCH")
+            self.assertFalse(res_vm["verified"])
+
+            # Case 5: UNKNOWN (flags missing)
+            mock_run.return_value = MagicMock(returncode=0, stdout="versionName=1.0.0\n")
+            res_unk = manager.verify_installed_package("com.test.app")
+            self.assertEqual(res_unk["code"], "UNKNOWN")
+            self.assertFalse(res_unk["verified"])
+
+        # Case 6: Invalid package name
+        with self.assertRaises(ValueError):
+            manager.verify_installed_package("invalid;pkg")
+
+    @patch("subprocess.run")
+    def test_grant_runtime_permission(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        with patch.object(manager, "get_package_apk_paths", return_value=["/data/app/com.test.app/base.apk"]):
+            def side_effect(cmd, *args, **kwargs):
+                mock_proc = MagicMock(returncode=0)
+                if "dumpsys" in cmd and "package" in cmd:
+                    mock_proc.stdout = "requested permissions:\n    android.permission.CAMERA\n    android.permission.RECORD_AUDIO\n"
+                elif "getprop" in cmd and "ro.build.version.sdk" in cmd:
+                    mock_proc.stdout = "29\n"
+                elif "pm" in cmd and "grant" in cmd:
+                    mock_proc.stdout = ""
+                else:
+                    mock_proc.stdout = ""
+                return mock_proc
+
+            mock_run.side_effect = side_effect
+
+            # Success grant with normalization (CAMERA -> android.permission.CAMERA)
+            res = manager.grant_runtime_permission("com.test.app", "CAMERA", action="grant")
+            self.assertEqual(res["code"], "OK")
+            self.assertTrue(res["granted"])
+            self.assertEqual(res["permission"], "android.permission.CAMERA")
+
+            # Permission not declared in manifest
+            res_not_decl = manager.grant_runtime_permission("com.test.app", "ACCESS_FINE_LOCATION")
+            self.assertEqual(res_not_decl["code"], "PERMISSION_NOT_DECLARED")
+            self.assertFalse(res_not_decl["declared"])
+
+            # Special permission rejected
+            res_special = manager.grant_runtime_permission("com.test.app", "SYSTEM_ALERT_WINDOW")
+            self.assertEqual(res_special["code"], "UNSUPPORTED_OPERATION")
+
+            # API < 23 rejected
+            def side_effect_old_api(cmd, *args, **kwargs):
+                mock_proc = MagicMock(returncode=0)
+                if "dumpsys" in cmd:
+                    mock_proc.stdout = "requested permissions:\n    android.permission.CAMERA\n"
+                elif "getprop" in cmd:
+                    mock_proc.stdout = "21\n"
+                return mock_proc
+
+            mock_run.side_effect = side_effect_old_api
+            res_old = manager.grant_runtime_permission("com.test.app", "CAMERA")
+            self.assertEqual(res_old["code"], "UNSUPPORTED_OPERATION")
+
+        # Invalid package or permission argument
+        with self.assertRaises(ValueError):
+            manager.grant_runtime_permission("invalid;pkg", "CAMERA")
+        with self.assertRaises(ValueError):
+            manager.grant_runtime_permission("com.test.app", "CAMERA;rm")
+
+    @patch("subprocess.run")
+    def test_force_stop_app(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        # Hard block protection
+        res_hard = manager.force_stop_app("android")
+        self.assertEqual(res_hard["code"], "PERMISSION_DENIED")
+
+        res_sysui = manager.force_stop_app("com.android.systemui")
+        self.assertEqual(res_sysui["code"], "PERMISSION_DENIED")
+
+        # Soft block protection
+        res_soft = manager.force_stop_app("com.google.android.gms", allow_system=False)
+        self.assertEqual(res_soft["code"], "PERMISSION_DENIED")
+
+        # Success force-stop
+        with patch.object(manager, "get_package_apk_paths", return_value=["/data/app/com.test.app/base.apk"]):
+            def side_effect_stop(cmd, *args, **kwargs):
+                mock_proc = MagicMock(returncode=0)
+                if "pidof" in cmd:
+                    mock_proc.stdout = ""  # process terminated
+                return mock_proc
+
+            mock_run.side_effect = side_effect_stop
+            res_ok = manager.force_stop_app("com.test.app")
+            self.assertEqual(res_ok["code"], "OK")
+            self.assertFalse(res_ok["is_running"])
+            self.assertTrue(res_ok["verified"])
+
+            # com.android.vending allowed with warning
+            res_vending = manager.force_stop_app("com.android.vending")
+            self.assertEqual(res_vending["code"], "OK")
+            self.assertIn("warning", res_vending)
+
+        # Invalid package name
+        with self.assertRaises(ValueError):
+            manager.force_stop_app("invalid;pkg")
+
+    @patch("subprocess.run")
+    def test_diagnostics(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+
+        # 1. getprop with target
+        mock_run.return_value = MagicMock(returncode=0, stdout="Pixel 8\n")
+        res_prop = manager.diagnostics("getprop", target="ro.product.model")
+        self.assertEqual(res_prop["code"], "OK")
+        self.assertEqual(res_prop["result"]["properties"]["ro.product.model"], "Pixel 8")
+
+        # 2. wm_size
+        mock_run.return_value = MagicMock(returncode=0, stdout="Physical size: 1080x2400\nOverride size: 720x1600\n")
+        res_size = manager.diagnostics("wm_size")
+        self.assertEqual(res_size["result"]["physical"], "1080x2400")
+        self.assertEqual(res_size["result"]["override"], "720x1600")
+
+        # 3. wm_density
+        mock_run.return_value = MagicMock(returncode=0, stdout="Physical density: 420\n")
+        res_density = manager.diagnostics("wm_density")
+        self.assertEqual(res_density["result"]["physical"], 420)
+
+        # 4. pidof
+        mock_run.return_value = MagicMock(returncode=0, stdout="12345 12346\n")
+        res_pidof = manager.diagnostics("pidof", target="com.test.app")
+        self.assertTrue(res_pidof["result"]["running"])
+        self.assertEqual(res_pidof["result"]["pids"], [12345, 12346])
+
+        # 5. ps with filter
+        ps_output = "USER PID PPID VSZ RSS WCHAN ADDR S NAME\nu0_a100 1234 1 1000 200 epoll 0 S com.test.app\nu0_a101 5678 1 1000 200 epoll 0 S com.other.app\n"
+        mock_run.return_value = MagicMock(returncode=0, stdout=ps_output)
+        res_ps = manager.diagnostics("ps", filter_text="test")
+        self.assertEqual(res_ps["result"]["count"], 1)
+        self.assertEqual(res_ps["result"]["processes"][0]["name"], "com.test.app")
+
+        # 6. dumpsys_window_focus
+        mock_run.return_value = MagicMock(returncode=0, stdout="mCurrentFocus=Window{123 u0 com.test/.Main}\nmFocusedApp=App{456 u0 com.test/.Main}\n")
+        res_focus = manager.diagnostics("dumpsys_window_focus")
+        self.assertIn("com.test/.Main", str(res_focus["result"]["current_focus"]))
+
+        # 7. Safety: forbidden characters rejected
+        with self.assertRaises(ValueError):
+            manager.diagnostics("getprop", target="ro.model;rm -rf /")
+        with self.assertRaises(ValueError):
+            manager.diagnostics("ps", filter_text="foo | bar")
+
+        # 8. Safety: invalid action rejected
+        with self.assertRaises(ValueError):
+            manager.diagnostics("rm_rf")
+
+        # 10. getprop without target (curated props)
+        mock_getprop_all = "[ro.product.model]: [Pixel 8]\n[ro.product.brand]: [google]\n[ro.build.version.sdk]: [34]\n"
+        mock_run.return_value = MagicMock(returncode=0, stdout=mock_getprop_all)
+        res_curated = manager.diagnostics("getprop")
+        self.assertEqual(res_curated["code"], "OK")
+        self.assertEqual(res_curated["result"]["properties"]["ro.product.model"], "Pixel 8")
+
+        # 11. dumpsys_package_version
+        with patch.object(manager, "verify_installed_package", return_value={"version_name": "1.0", "version_code": "1", "debuggable": False, "flags": ["HAS_CODE"]}):
+            res_dpv = manager.diagnostics("dumpsys_package_version", target="com.test.app")
+            self.assertEqual(res_dpv["code"], "OK")
+            self.assertEqual(res_dpv["result"]["package"]["version_name"], "1.0")
+
+        # 12. Timeout and max_output_chars boundary errors
+        with self.assertRaises(ValueError):
+            manager.diagnostics("getprop", timeout=0)
+        with self.assertRaises(ValueError):
+            manager.diagnostics("getprop", timeout=70)
+        with self.assertRaises(ValueError):
+            manager.diagnostics("getprop", max_output_chars=500)
+        with self.assertRaises(ValueError):
+            manager.diagnostics("getprop", max_output_chars=70000)
+        with self.assertRaises(ValueError):
+            manager.diagnostics("pidof")  # missing target
+        with self.assertRaises(ValueError):
+            manager.diagnostics("dumpsys_package_version")  # missing target
+
+    @patch("subprocess.run")
+    def test_force_stop_failed_variant(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+        with patch.object(manager, "get_package_apk_paths", return_value=["/data/app/com.stubborn.app/base.apk"]):
+            # pidof continues returning a PID
+            mock_run.return_value = MagicMock(returncode=0, stdout="8888\n")
+            res = manager.force_stop_app("com.stubborn.app")
+            self.assertEqual(res["code"], "FORCE_STOP_FAILED")
+            self.assertTrue(res["is_running"])
+            self.assertFalse(res["verified"])
+
+    @patch("subprocess.run")
+    def test_verify_installed_package_debug_and_version_code_mismatch(self, mock_run):
+        manager = ADBManager(adb_path="mock_adb")
+        with patch.object(manager, "get_package_apk_paths", return_value=["/data/app/com.test.app/base.apk"]):
+            # Case expect_release=False with debuggable=True -> verified=True
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="versionName=1.0.0\nversionCode=10\npkgFlags=[ DEBUGGABLE HAS_CODE ]\n",
+            )
+            res_dbg_ok = manager.verify_installed_package("com.test.app", expect_release=False)
+            self.assertEqual(res_dbg_ok["code"], "OK")
+            self.assertTrue(res_dbg_ok["verified"])
+            self.assertTrue(res_dbg_ok["debuggable"])
+
+            # Case expected_version_code mismatch
+            res_vc_mismatch = manager.verify_installed_package("com.test.app", expect_release=False, expected_version_code="99")
+            self.assertEqual(res_vc_mismatch["code"], "VERSION_MISMATCH")
+            self.assertFalse(res_vc_mismatch["verified"])
+
+    @patch("subprocess.run")
+    def test_get_apk_metadata_with_axml(self, mock_run):
+        import zipfile
+        manager = ADBManager(adb_path="mock_adb")
+
+        with tempfile.NamedTemporaryFile(suffix=".apk") as tmp_apk:
+            with zipfile.ZipFile(tmp_apk.name, "w") as zf:
+                zf.writestr("AndroidManifest.xml", b"fake_axml_content")
+
+            with patch("apk_extractor.axml.decode_axml", return_value='<manifest package="com.decoded.app" android:versionName="3.1" android:versionCode="31" android:debuggable="true"/>'):
+                meta = manager.get_apk_metadata(tmp_apk.name)
+                self.assertEqual(meta["package_name"], "com.decoded.app")
+                self.assertEqual(meta["version_name"], "3.1")
+                self.assertEqual(meta["version_code"], "31")
+                self.assertTrue(meta["debuggable"])
+                self.assertTrue(meta["manifest_found"])
+
+            # Test missing manifest
+            with zipfile.ZipFile(tmp_apk.name, "w") as zf:
+                zf.writestr("some_other_file.txt", b"hello")
+            meta_none = manager.get_apk_metadata(tmp_apk.name)
+            self.assertFalse(meta_none["manifest_found"])
+
+    @patch("subprocess.run")
+    def test_get_apk_metadata_and_install_apk_enrichment(self, mock_run):
+        import zipfile
+        manager = ADBManager(adb_path="mock_adb")
+
+        with tempfile.NamedTemporaryFile(suffix=".apk") as tmp_apk:
+            # Create a mock APK containing minimal AndroidManifest.xml
+            with zipfile.ZipFile(tmp_apk.name, "w") as zf:
+                zf.writestr("AndroidManifest.xml", b"not_axml_plain_text")
+
+            # get_apk_metadata with fallback
+            meta = manager.get_apk_metadata(tmp_apk.name)
+            self.assertIn("package_name", meta)
+
+            # Test install_apk enrichment
+            mock_proc = MagicMock(returncode=0, stdout="Performing Streamed Install\nSuccess\n", stderr="")
+            mock_run.return_value = mock_proc
+
+            with patch.object(manager, "get_apk_metadata", return_value={"package_name": "com.test.app", "version_name": "1.0", "version_code": "1", "debuggable": False}):
+                with patch.object(manager, "verify_installed_package", return_value={"status": "success", "code": "OK", "version_name": "1.0", "version_code": "1", "debuggable": False}):
+                    ok, code, detail = manager.install_apk(tmp_apk.name, verify=True)
+                    self.assertTrue(ok)
+                    self.assertEqual(code, "SUCCESS")
+                    self.assertEqual(detail["code"], "OK")
+                    self.assertEqual(detail["package_name"], "com.test.app")
+                    self.assertEqual(detail["verification"], "verified")
+                    self.assertFalse(detail["debuggable"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-# apkx (v1.4.3) - Android APK & Split-APK Extractor CLI
+# apkx (v1.4.4) - Android APK & Split-APK Extractor CLI
 
 Tool CLI interaktif dan cepat untuk mengekstrak dan menganalisis file APK dari aplikasi yang sudah terinstall di perangkat Android ke komputer Anda.
 
@@ -34,8 +34,8 @@ Mendukung otomatisasi penuh untuk **Single APK** (`.apk`) maupun **Split APKs / 
     * Mengontrol perangkat secara live: screenshot berkecepatan tinggi (`exec-out screencap`), ekstraksi posisi tombol presisi (`dump_ui_hierarchy`), simulasi interaksi sentuh (tap, swipe, input teks, tombol kembali), bangunkan layar, dan auto-unlock PIN.
 11. **Autonomous Closed-Loop Testing & APK Deployment:**
     * Pasang langsung APK hasil build ke perangkat fisik (`apkx_install_apk`), reset data seketika (`pm clear`), diagnosa crash/exception tertarget via filtered logcat (`apkx_get_app_logs`), serta verifikasi adaptasi Dark Mode / Light Mode.
-12. **AI-Native MCP Server & Antigravity Skill (23 Tools):**
-    * Siap berkolaborasi langsung dengan AI Coding Agent (Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) via `apkx setup`, dilengkapi protokol pre-flight check perangkat dan SOP blueprint 8 fase.
+12. **AI-Native MCP Server & Antigravity Skill (28 Tools):**
+    * Siap berkolaborasi langsung dengan AI Coding Agent (Antigravity, Cursor, Claude Desktop, Windsurf, VS Code) via `apkx setup`, dilengkapi protokol pre-flight check perangkat, Zero-Raw-ADB Mandate, dan SOP blueprint 8 fase dengan 2-Stage Deployment Pipeline (Fase 7a Debug Iteration → Fase 7b Release Handoff Gate).
 13. **Zero-Config ADB (Auto-Download):**
     * Tidak perlu memasang Android Studio yang besar! Jika ADB belum terpasang, `apkx` otomatis mengunduh Google Platform-Tools resmi (~12 MB) secara instan. Bekerja di Windows, macOS, dan Linux.
 
@@ -225,11 +225,11 @@ apkx setup
 ```
 Perintah ini otomatis:
 1. Memindai AI coding agent yang terpasang dan mendaftarkan server MCP `apkx serve`.
-2. Menyinkronkan **Skill Antigravity** (`apkx-android-blueprint`) ke `~/.gemini/config/skills/` agar AI Agent memahami SOP analisis APK secara metodis.
+2. Menyinkronkan **Skill Antigravity** (`apkx-android-blueprint`) ke `~/.gemini/config/skills/` agar AI Agent memahami SOP analisis APK secara metodis dengan prinsip **Zero-Raw-ADB Mandate** dan **2-Stage Deployment Pipeline**.
 
-Server MCP `apkx` menyediakan 23 tools siap pakai:
-* `apkx_list_devices`: Pre-flight check & daftar perangkat Android terhubung lengkap dengan status kesiapan (READY, NO_DEVICE, UNAUTHORIZED) dan panduan troubleshooting.
-* `apkx_list_apps`: Daftar aplikasi terpasang (nama aplikasi ramah + package ID).
+Server MCP `apkx` menyediakan 28 tools siap pakai:
+* `apkx_list_devices`: Pre-flight check & daftar perangkat Android terhubung lengkap dengan status kesiapan (`READY`, `NO_DEVICE`, `UNAUTHORIZED`, `OFFLINE`) dan panduan troubleshooting.
+* `apkx_list_apps`: Daftar aplikasi terpasang (nama ramah + package ID) dengan dukungan penyaringan cepat via parameter `query`.
 * `apkx_get_app_info`: Audit teknis cepat (versi, SDK, permission) tanpa unduh APK.
 * `apkx_pull_and_extract`: Tarik APK/APKS dari ponsel dan ekstrak seluruh artefak blueprint.
 * `apkx_get_manifest`: Baca XML terbaca dari `AndroidManifest.xml` (termasuk dari dalam arsip `.apks`).
@@ -238,31 +238,64 @@ Server MCP `apkx` menyediakan 23 tools siap pakai:
 * `apkx_inspect_class`: Dekompilasi on-demand satu kelas spesifik via JADX.
 * `apkx_find_classes`: Cari kelas spesifik (misal: Auth, Repository, ViewModel) berdasarkan kata kunci.
 * `apkx_search_endpoints`: Filter endpoint dan domain API berdasarkan kata kunci (misal: login, api, v1, graphql).
-* `apkx_extract_sqlite_schema`: Ekstrak skema tabel SQLite dari biner `libapp.so` atau DEX secara otomatis (bebas truncation tipe kolom bersarang).
-* `apkx_install_apk`: Pasang file APK atau .apks ke perangkat fisik (auto install-multiple, auto flag -r, -g, -d & diagnosa error).
-* `apkx_uninstall_app`: Hapus instalasi aplikasi dari perangkat untuk reinstall bersih atau ganti signature.
+* `apkx_extract_sqlite_schema`: Ekstrak skema tabel SQLite dari biner `libapp.so` atau DEX secara otomatis.
+* `apkx_install_apk`: Pasang file APK atau .apks ke perangkat fisik dengan konfigurasi default aman release (`grant_permissions=False`, `allow_downgrade=False`, `verify=True`), auto install-multiple, dan diagnosa error interaktif (`UPDATE_INCOMPATIBLE`, `PLAY_PROTECT_BLOCKED`).
+* `apkx_uninstall_app`: Hapus instalasi aplikasi dari perangkat untuk reinstall bersih atau pembersihan signature debug.
 * `apkx_launch_app`: Buka aplikasi target atau aplikasi kloningan di HP Android (`am start -S`).
-* `apkx_take_screenshot`: Ambil tangkapan layar perangkat berkecepatan tinggi via `adb exec-out`.
+* `apkx_take_screenshot`: Ambil tangkapan layar perangkat berkecepatan tinggi via ADB framebuffer.
 * `apkx_dump_ui_hierarchy`: Dapatkan posisi titik tengah `[center_x, center_y]` seluruh tombol & elemen UI.
-* `apkx_interact`: Jalankan aksi tap koordinat, tombol kembali (back), home, swipe, atau pengetikan teks.
+* `apkx_find_ui_element`: Cari elemen UI secara semantik (`text`, `resource_id`, `content_desc`, `class`, atau `any`) lengkap dengan koordinat klik tengah otomatis.
+* `apkx_interact`: Jalankan aksi sentuh: `tap`, `long_press` (dengan `duration_ms`), tombol kembali (`back`), `home`, recent apps (`recent_apps`), penghapusan teks (`backspace` dengan `count`), `swipe`, atau input `text`.
 * `apkx_ensure_device_awake`: Bangunkan layar, auto-unlock PIN/swipe, dan aktifkan pencegah layar tidur USB.
-* `apkx_get_current_screen`: Deteksi nama Activity & proses PID yang sedang aktif di puncak layar.
+* `apkx_get_current_screen`: Deteksi nama Activity, proses PID, verifikasi target di latar depan (`expected_package`), serta deteksi status overlay transparan Google Play Protect.
 * `apkx_get_app_logs`: Perekam log error & crash tertarget khusus aplikasi target (Flutter/React Native/Android).
 * `apkx_reset_app_data`: Reset total data aplikasi (`pm clear`) untuk pengujian ulang fresh-install state.
 * `apkx_open_deep_link`: Buka rute halaman spesifik via URL/Deep Link Intent secara langsung.
 * `apkx_toggle_night_mode`: Beralih antara Dark Mode dan Light Mode untuk verifikasi visual multi-tema.
+* `apkx_diagnostics`: Inspeksi sistem aman berbasis allowlist ketat (`battery`, `meminfo`, `getprop`, `disk`, `display`, `package_path`, `network`) tanpa raw shell subprocess.
+* `apkx_force_stop_app`: Hentikan paksa proses aplikasi atau overlay pemblokir (`com.android.vending`) dengan proteksi hard/soft blocklist sistem operasi.
+* `apkx_verify_install`: Verifikasi status instalasi paket, status flag rilis produksi (`debuggable=False`), versi, dan path instalasi untuk Release Gate Verification.
+* `apkx_grant_permission`: Berikan izin runtime Android secara selektif dengan normalisasi otomatis nama permission pendek (misal: `CAMERA` → `android.permission.CAMERA`).
 
-#### Standar Kode Error Terstruktur MCP (Production Error Boundary)
-Seluruh tool MCP dijamin tidak akan melempar uncaught exception (`UnexpectedToolError`). Jika operasi gagal, response akan selalu berupa JSON terstruktur dengan format `{"status": "error", "error_code": "...", "message": "...", ...}` dengan kode error baku:
-- `DEVICE_NOT_READY`: Perangkat offline, tidak terdeteksi via ADB, atau izin USB Debugging belum disetujui (UNAUTHORIZED).
-- `APP_NOT_FOUND`: Aplikasi atau package ID tidak ditemukan pada perangkat target.
-- `APK_NOT_FOUND`: Berkas APK tidak ditemukan pada lokasi remote perangkat atau path lokal.
-- `ADB_ERROR`: Terjadi kegagalan komunikasi atau eksekusi perintah ADB subprocess.
-- `INVALID_ARCHIVE`: Berkas arsip APK/APKS korup, terpotong, atau bukan format zip yang valid.
-- `INVALID_PATH`: Path yang diberikan berada di luar batas direktori output yang diizinkan (mencegah path traversal).
-- `INVALID_QUERY`: Query pencarian kosong atau tidak valid.
-- `IO_ERROR`: Terjadi kegagalan I/O pada sistem berkas (akses ditolak, disk penuh, dsb.).
-- `INTERNAL_ERROR`: Error sistem tak terduga yang tertangkap oleh top-level error boundary.
+#### Kontrak Respons MCP Konsisten (Flat Architecture)
+Seluruh respons MCP dirancang terprediksi dan konsisten:
+1. **Tool Aksi & Kueri (24 tool):** Mengembalikan flat dictionary `Dict[str, Any]` dengan field baku di tingkat atas (`status`, `code`, `message`, payload). Tidak menggunakan pembungkus nested `data`.
+2. **Tool Daftar Aplikasi (`apkx_list_apps`):** Mengembalikan `List[Dict[str, Any]]` langsung untuk kemudahan iterasi list oleh AI agent.
+3. **Tool Pembaca Konten Teks (3 tool: `apkx_get_manifest`, `apkx_get_class_skeleton`, `apkx_inspect_class`):** Mengembalikan `str` langsung.
+
+#### Standar 21 Kode Error Baku (Canonical Error Codes)
+Seluruh tool MCP dijamin tidak akan melempar uncaught exception (`UnexpectedToolError`). Seluruh kegagalan menghasilkan `status: "error"` dengan salah satu dari 21 kode kanonikal berikut:
+
+| Kode Error | Keterangan Kondisi |
+| :--- | :--- |
+| `OK` | Operasi berhasil dieksekusi tanpa kendala. |
+| `NO_DEVICE` | Tidak ada perangkat Android fisik atau emulator yang terhubung via ADB. |
+| `UNAUTHORIZED` | Perangkat terhubung tetapi menunggu persetujuan dialog USB Debugging di layar HP. |
+| `OFFLINE` | Perangkat terhubung namun dalam kondisi offline atau tidak responsif. |
+| `TIMEOUT` | Perintah ADB atau sub-proses melebihi batas waktu eksekusi yang ditentukan. |
+| `APP_NOT_FOUND` | Nama aplikasi atau kata kunci tidak cocok dengan aplikasi mana pun. |
+| `PACKAGE_NOT_FOUND` | Package name spesifik tidak terpasang di perangkat. |
+| `NOT_FOUND` | Elemen UI, artefak, atau berkas yang dicari tidak ditemukan. |
+| `INVALID_ARGUMENT` | Parameter fungsi kosong, salah tipe data, atau format tidak sesuai. |
+| `INVALID_ACTION` | Aksi diagnostik atau tipe interaksi tidak terdaftar dalam allowlist. |
+| `INVALID_COORDINATES` | Koordinat sentuh berada di luar resolusi layar fisik perangkat. |
+| `PACKAGE_PROTECTED` | Paket yang ditargetkan masuk dalam daftar proteksi sistem (hard/soft blocklist). |
+| `PERMISSION_NOT_DECLARED` | Permission runtime tidak dideklarasikan di dalam AndroidManifest.xml aplikasi. |
+| `SPECIAL_PERMISSION_NOT_SUPPORTED` | Izin yang diminta merupakan izin khusus sistem (`SYSTEM_ALERT_WINDOW`, `WRITE_SETTINGS`) yang tidak dapat diberikan via `pm grant`. |
+| `UNSUPPORTED_API_LEVEL` | Fitur memerlukan versi Android yang lebih tinggi (misal: runtime permission memerlukan API >= 23). |
+| `DEBUGGABLE_MISMATCH` | Status flag `debuggable` pada aplikasi terpasang tidak sesuai dengan ekspektasi verifikasi release. |
+| `UPDATE_INCOMPATIBLE` | Kegagalan instalasi akibat bentrok tanda tangan signature kunci debug vs release. Solusi: uninstall versi lama terlebih dahulu. |
+| `PLAY_PROTECT_BLOCKED` | Pemasangan diblokir oleh dialog atau verifikasi Google Play Protect. |
+| `INSTALL_FAILED` | Kegagalan umum saat eksekusi `adb install`. |
+| `UI_DUMP_FAILED` | Gagal mengambil snapshot pohon UI perangkat (layar mati, transisi, atau uiautomator sibuk). |
+| `ADB_ERROR` | Terjadi kesalahan eksekusi perintah ADB internal. |
+| `UNKNOWN` | Kesalahan tak terduga yang tertangkap oleh top-level error boundary. |
+
+#### Catatan Migrasi (v1.4.3 → v1.4.4)
+- **Zero-Raw-ADB Mandate:** AI Agent dilarang memanggil `adb ...` manual di shell terminal. Seluruh operasi perangkat wajib menggunakan tool MCP `apkx_*`.
+- **2-Stage Deployment Pipeline:** Alur kerja skill `.agents/skills/apkx-android-blueprint/SKILL.md` dipisah menjadi Fase 7a (Debug Iteration & Self-Healing) dan Fase 7b (Release Handoff Gate wajib menggunakan `apkx_verify_install`).
+- **Safe Defaults `apkx_install_apk`:** Flag `grant_permissions` dan `allow_downgrade` kini bernilai `False` secara default untuk menjamin perilaku pemasangan siap rilis produksi.
+- **SOP Play Protect:** Penanganan overlay `com.android.vending` kini menggunakan alur klik semantik UI (`apkx_find_ui_element`) dan penutupan aman (`apkx_force_stop_app`), menggantikan modifikasi pengaturan global yang tidak aman.
 
 ### 15. Pembaruan Otomatis (Self-Update)
 Periksa dan perbarui `apkx` ke versi terbaru langsung dari GitHub:

@@ -89,6 +89,36 @@ class TestSetupMCP(unittest.TestCase):
         self.assertTrue(pkg_skill.is_file(), f"Package skill must exist: {pkg_skill}")
         self.assertEqual(repo_skill.read_bytes(), pkg_skill.read_bytes())
 
+    def test_antigravity_home_skill_byte_identical(self):
+        repo_skill = (
+            Path(__file__).parent.parent
+            / ".agents"
+            / "skills"
+            / "apkx-android-blueprint"
+            / "SKILL.md"
+        )
+        home_skill = Path.home() / ".gemini" / "config" / "skills" / "apkx-android-blueprint" / "SKILL.md"
+        if home_skill.exists():
+            self.assertEqual(repo_skill.read_bytes(), home_skill.read_bytes())
+
+    def test_sync_antigravity_skill_byte_identical_with_temp_home(self):
+        repo_skill = (
+            Path(__file__).parent.parent
+            / ".agents"
+            / "skills"
+            / "apkx-android-blueprint"
+            / "SKILL.md"
+        )
+        with tempfile.TemporaryDirectory() as tmp_d:
+            fake_home = Path(tmp_d)
+            with patch("pathlib.Path.home", return_value=fake_home):
+                from apk_extractor.setup_mcp import sync_antigravity_skill
+                res = sync_antigravity_skill()
+                self.assertEqual(res["status"], "success")
+                synced_skill = fake_home / ".gemini" / "config" / "skills" / "apkx-android-blueprint" / "SKILL.md"
+                self.assertTrue(synced_skill.is_file())
+                self.assertEqual(repo_skill.read_bytes(), synced_skill.read_bytes())
+
     def test_load_skill_content(self):
         from apk_extractor.setup_mcp import load_skill_content
         content = load_skill_content()

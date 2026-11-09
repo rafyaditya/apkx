@@ -5,6 +5,9 @@ description: Master skill for reverse engineering, inspecting, live UI/UX traver
 
 # Android APK Reverse Engineering, Live UI Traversal & Blueprint Synthesis (apkx)
 
+> [!CAUTION] ZERO-RAW-ADB MANDATE
+> DILARANG KERAS memanggil perintah shell `adb ...` secara manual melalui terminal/bash. Seluruh inspeksi, dump UI, instalasi, pengujian interaksi, dan diagnostik perangkat wajib 100% menggunakan MCP tool `apkx_*`. Jika Anda membutuhkan data sistem atau status perangkat, gunakan `apkx_diagnostics`, `apkx_get_current_screen`, `apkx_dump_ui_hierarchy`, atau `apkx_get_app_logs`.
+
 Tujuan utama skill ini adalah memandu AI Agent dalam menganalisis berkas APK/APKS hasil ekstraksi `apkx` secara metodis, mengekstrak arsitektur inti aplikasi, memetakan skema database (termasuk SQLite di `libapp.so`), menjelajahi seluruh fitur UI aplikasi target secara langsung di ponsel melalui ADB (*screencap & tap*), menyusun cetak biru (*blueprint*) arsitektur, dan memverifikasi aplikasi hasil kloningan langsung di perangkat fisik dengan siklus perbaikan mandiri (*Self-Healing Loop*).
 
 ---
@@ -14,7 +17,7 @@ Tujuan utama skill ini adalah memandu AI Agent dalam menganalisis berkas APK/APK
 1. **Evidence-Based (Berbasis Bukti):** Jangan pernah menebak struktur data, endpoint API, atau logika bisnis jika Anda bisa memverifikasinya langsung dari artefak `apkx` (Manifest, `endpoints.json`, `class_skeleton.txt`, `sqlite_schema.sql`, atau dekompilasi JADX).
 2. **Live Visual Grounding (Eksplorasi Layar Nyata):** Blueprint statis tidak menggambarkan alur UX secara utuh. Buka aplikasi target di ponsel via ADB, ambil screenshot untuk tiap tab dan modal, lalu gunakan penalaran visual multimodal AI untuk mengidentifikasi tata letak, warna, dan kelemahan UI aplikasi asli.
 3. **Clean-Room Reimplementation:** Hasil reverse engineering digunakan sebagai acuan arsitektur (kontrak API, model data, dan alur UI), kemudian dibangun ulang secara bersih menggunakan standar framework target (misalnya menerapkan *Flutter Anti-Slop*).
-4. **Autonomous Runtime Verification (Self-Healing):** Jangan anggap pekerjaan selesai sebelum aplikasi yang dibangun berhasil diinstall ke HP dan diuji coba langsung. Jalankan simulasi interaksi (tap, form input, submit) dan segera perbaiki jika ditemukan error atau glitch visual.
+4. **Autonomous Runtime Verification (2-Stage Deployment):** Jangan anggap pekerjaan selesai sebelum aplikasi yang dibangun berhasil diuji coba pada versi debug dan diganti dengan versi release siap produksi yang terverifikasi bebas bug.
 
 ---
 
@@ -28,7 +31,8 @@ flowchart TD
     P3 --> P4["Fase 4: Live Target App Exploration (ADB Traversal & Screencap)"]
     P4 --> P5["Fase 5: Sintesis Blueprint Kloning Aplikasi"]
     P5 --> P6["Fase 6: Rekonstruksi Aplikasi Bersih (Clean Architecture)"]
-    P6 --> P7["Fase 7: Post-Deployment Live Device Testing & Self-Healing Loop"]
+    P6 --> P7a["Fase 7a: Pengujian Iteratif & Self-Healing (Debug APK)"]
+    P7a --> P7b["Fase 7b: Release Handoff Gate & Verifikasi (Release APK)"]
 ```
 
 ---
@@ -64,10 +68,12 @@ Sebelum mengeksekusi operasi perangkat apa pun (seperti `apkx_list_apps`, `apkx_
 ### Fase 1: Deteksi Framework & Quick Audit
 Sebelum memeriksa kode secara mendalam, kenali teknologi dasar aplikasi target:
 
-1. **Jalankan `apkx_get_app_info(package_name)`** untuk melihat:
+1. **Cari Aplikasi Terpasang via `apkx_list_apps(query="...")`:**
+   Gunakan parameter `query` untuk menyaring aplikasi berdasarkan substring nama atau package secara efisien.
+2. **Jalankan `apkx_get_app_info(package_name)`** untuk melihat:
    * `targetSdk`, `minSdk`, versi aplikasi, dan lokasi file APK di ponsel.
    * Format aplikasi (Single APK vs Split-APK/App Bundle).
-2. **Tarik dan Ekstrak Berkas via `apkx_pull_and_extract(query_or_package)`**:
+3. **Tarik dan Ekstrak Berkas via `apkx_pull_and_extract(query_or_package)`**:
    * Periksa Framework terdeteksi di `README_ANALISIS.txt` atau `analysis_info.json`:
      * **Flutter:** Memiliki `libflutter.so` dan `libapp.so`. Logika di compiled native AOT `libapp.so`.
      * **React Native:** Memiliki `index.android.bundle` (Hermes bytecode `.hbc` atau Plain JS).
@@ -104,12 +110,12 @@ Gunakan tool **`apkx_search_endpoints(target_path, query=...)`**:
 Buka aplikasi target di HP yang terhubung untuk memetakan seluruh antarmuka dan menangkap cacat desain aplikasi asli:
 
 1. **Pastikan Layar Menyala & Tidak Terkunci:**
-   * Panggil tool **`apkx_ensure_device_awake()`** terlebih dahulu. Tool ini mengaktifkan mode *Stay Awake via USB*, membangunkan layar, dan membuka kunci swipe/PIN otomatis. Jika ponsel terkunci PIN dan PIN belum diset, tool akan mengembalikan status peringatan agar Agen tidak melakukan tap sembarangan ke keypad lockscreen.
+   * Panggil tool **`apkx_ensure_device_awake()`** terlebih dahulu. Tool ini mengaktifkan mode *Stay Awake via USB*, membangunkan layar, dan membuka kunci swipe/PIN otomatis.
 2. **Buka Aplikasi Target & Cek Layar Aktif:**
    * Panggil tool **`apkx_launch_app(package_name, restart=True)`**.
-   * Verifikasi Activity yang sedang tampil di layar menggunakan **`apkx_get_current_screen()`** untuk memastikan aplikasi berhasil berada di latar depan (*foreground*).
+   * Verifikasi Activity yang sedang tampil di layar menggunakan **`apkx_get_current_screen(expected_package=package_name)`** untuk memastikan aplikasi berhasil berada di latar depan (*foreground*).
 3. **Ambil Tangkapan Layar Berkecepatan Tinggi:**
-   * Panggil **`apkx_take_screenshot(output_path="output/screen_target_home.png")`** (atau `adb exec-out screencap -p > output/screen_target_home.png`).
+   * Panggil **`apkx_take_screenshot(output_path="output/screen_target_home.png")`**.
    * Baca file gambar menggunakan tool `Read` untuk penalaran visual multimodal.
 4. **Penjelajahan Matriks Antarmuka Sistematis (Full Feature Traversal):**
    * **Bottom Navigation Bar:** Berpindah ke setiap tab dengan memanggil `apkx_interact(action="tap", x=..., y=...)` dan ambil screenshot untuk setiap tab:
@@ -119,8 +125,9 @@ Buka aplikasi target di HP yang terhubung untuk memetakan seluruh antarmuka dan 
      * `screen_target_tab_setelan.png`
    * **Floating Action Button (FAB / +):** Tap tombol tambah aksi untuk menangkap form transaksi / modal dialog (`screen_target_add.png`).
    * **Drawer Menu / Header:** Tap menu samping atau filter tanggal di header atas.
-   * **Inspeksi Bounding Box Presisi:** Jika butuh koordinat pasti tombol teks, panggil **`apkx_dump_ui_hierarchy()`** untuk mendapatkan koordinat tengah `[center_x, center_y]` dari elemen target.
-   * **Navigasi Kembali Aman:** Gunakan `apkx_interact(action="back")` (atau `adb shell input keyevent 4`) untuk menutup dialog/keyboard.
+   * **Pencarian Elemen Semantik UI:** Gunakan **`apkx_find_ui_element(query="Simpan")`** untuk mendapatkan posisi koordinat tengah tombol secara presisi tanpa perlu menghitung manual dari XML dump mentah.
+   * **Inspeksi Bounding Box Menyeluruh:** Panggil **`apkx_dump_ui_hierarchy()`** jika membutuhkan seluruh pohon elemen layar.
+   * **Navigasi Kembali Aman:** Gunakan `apkx_interact(action="back")` untuk menutup dialog/keyboard.
 5. **Audit Kelemahan UI/UX Aplikasi Asli:**
    Catat kelemahan visual aplikasi target untuk diperbaiki pada aplikasi baru:
    * *Kontras Buruk:* Teks gelap di atas background gelap (tidak lolos WCAG AAA).
@@ -146,67 +153,112 @@ Bangun aplikasi target baru (misal Flutter):
 3. Jalankan verifikasi statis:
    * `flutter analyze` (pastikan 0 warnings / errors).
    * `flutter test` (pastikan seluruh widget & unit test lolos 100%).
-4. Kompilasi biner APK:
-   * `flutter build apk --release` (atau `--debug` untuk pengembangan cepat).
 
 ---
 
-### Fase 7: Post-Deployment Live Device Testing & Self-Healing Loop
-Setelah aplikasi dibangun, wajib pasang dan uji coba langsung di ponsel fisik:
+### Fase 7a: Pengujian Iteratif & Self-Healing (Debug APK)
+Selama fase pengembangan dan perbaikan cepat (debugging), pasang versi debug untuk memvalidasi fungsionalitas dan memperbaiki error secara otonom:
 
-1. **Pemasangan via MCP / ADB:**
-   * Panggil tool **`apkx_install_apk(apk_path="build/app/outputs/flutter-apk/app-debug.apk")`**.
-   * Tool ini otomatis mengaktifkan flag `-r` (reinstall), `-d` (downgrade), dan `-g` (memberikan seluruh izin runtime otomatis).
-   * *Jika terjadi kegagalan akibat konflik signature (`UPDATE_INCOMPATIBLE`):*
-     Panggil **`apkx_uninstall_app(package_name)`** untuk membersihkan versi lama, lalu pasang kembali.
-2. **Peluncuran & Verifikasi Layar Pertama:**
-   * Pastikan layar menyala dengan **`apkx_ensure_device_awake()`**.
-   * Buka aplikasi via **`apkx_launch_app(new_package_name)`** dan verifikasi status layar aktif via **`apkx_get_current_screen()`**.
-   * Ambil screenshot awal via **`apkx_take_screenshot("output/screen_new_app.png")`**.
-   * Periksa gambar via `Read`: pastikan aplikasi tidak freeze, blank, atau crash.
-3. **Simulasi Interaksi End-to-End:**
-   * Uji seluruh tab navigasi satu per satu via `apkx_interact(action="tap", x=..., y=...)` dan screenshot masing-masing tab.
-   * Lakukan simulasi pembuatan data nyata:
-     * Buka form tambah data (`screen_add.png`).
-     * Masukkan nilai/input teks (`apkx_interact(action="text", text="...")`).
-     * Tekan tombol submit/simpan.
-     * Verifikasi bahwa layar Beranda atau Riwayat langsung memperbarui data secara real-time.
-4. **Verifikasi Kondisi Fresh-Install & Multi-Tema:**
-   * Uji alur onboarding awal dengan membersihkan data instan via **`apkx_reset_app_data(new_package_name)`** (hanya 0.5 detik tanpa perlu install ulang).
-   * Uji responsivitas warna pada Dark Mode & Light Mode via **`apkx_toggle_night_mode(True)`** dan **`apkx_toggle_night_mode(False)`**.
+1. **Bangun APK Debug:**
+   Eksekusi perintah build: `flutter build apk --debug`.
+2. **Pemasangan via MCP:**
+   Panggil tool **`apkx_install_apk(apk_path="build/app/outputs/flutter-apk/app-debug.apk", allow_downgrade=True, reinstall=True)`**.
+   *Jika terjadi konflik signature (`UPDATE_INCOMPATIBLE`), panggil `apkx_uninstall_app(package_name=new_package_name)` lalu pasang kembali.*
+3. **Peluncuran & Verifikasi Layar Pertama:**
+   * Pastikan layar menyala dan tidak terkunci via **`apkx_ensure_device_awake()`**.
+   * Buka aplikasi via **`apkx_launch_app(package_name=new_package_name, restart=True)`**.
+   * Verifikasi Activity yang aktif di layar via **`apkx_get_current_screen(expected_package=new_package_name)`**. Pastikan `is_target_foreground == True`.
+   * Ambil tangkapan layar via **`apkx_take_screenshot(output_path="output/screen_debug_home.png")`** dan baca hasilnya via `Read`.
+4. **Simulasi Interaksi End-to-End:**
+   * Uji seluruh alur navigasi dan form input:
+     - Cari elemen tombol secara semantik via **`apkx_find_ui_element(query="...")`** untuk mendapatkan titik tengah `[center_x, center_y]`.
+     - Tap elemen via `apkx_interact(action="tap", x=center[0], y=center[1])`.
+     - Ketik teks pada form via `apkx_interact(action="text", text="...")`.
+     - Hapus input jika perlu via `apkx_interact(action="backspace", count=N)`.
+     - Tekan lama item via `apkx_interact(action="long_press", x=..., y=..., duration_ms=1000)`.
+     - Alihkan aplikasi via `apkx_interact(action="recent_apps")`.
+   * Jika aplikasi meminta izin runtime (kamera, notifikasi, storage), gunakan **`apkx_grant_permission(package_name=new_package_name, permission="android.permission.CAMERA")`**.
 5. **Siklus Perbaikan Mandiri (Self-Healing Loop):**
-   * *Jika ditemukan kejanggalan visual, freeze, atau crash:*
-     1. Ambil log error tertarget seketika via **`apkx_get_app_logs(new_package_name)`** untuk melihat stacktrace exception.
-     2. Buka dan perbaiki langsung file kode sumber yang bermasalah.
-     3. Kompilasi ulang (`flutter build apk`) dan pasang kembali via **`apkx_install_apk(...)`**.
-     4. Jalankan kembali simulasi screenshot hingga seluruh alur terbukti berfungsi 100% sempurna tanpa bug.
+   * Jika terjadi crash, layar putih, atau exception:
+     1. Ambil logcat tertarget via **`apkx_get_app_logs(package_name=new_package_name, lines=200)`**.
+     2. Perbaiki kode sumber yang bermasalah.
+     3. Kompilasi ulang (`flutter build apk --debug`) dan pasang kembali via `apkx_install_apk(...)`.
+     4. Ulangi pengujian sampai seluruh fitur berjalan tanpa error.
+
+---
+
+### Fase 7b: Release Handoff Gate (WAJIB - Release APK)
+Setelah aplikasi terbukti berjalan stabil pada versi debug, AI Agent **WAJIB** mengganti instalasi perangkat ke versi Release agar pengguna mendapatkan performa produksi maksimal:
+
+1. **Bersihkan Instalasi Debug Lama:**
+   Panggil **`apkx_uninstall_app(package_name=new_package_name, keep_data=False)`** untuk mencegah kegagalan akibat bentrok signature kunci debug vs release (`UPDATE_INCOMPATIBLE`).
+2. **Kompilasi APK Siap Release:**
+   Eksekusi perintah kompilasi produksi: `flutter build apk --release`.
+   *(Pastikan biner output berada di `build/app/outputs/flutter-apk/app-release.apk`)*.
+3. **Pemasangan Versi Release:**
+   Panggil tool **`apkx_install_apk(apk_path="build/app/outputs/flutter-apk/app-release.apk", allow_downgrade=False, reinstall=True, verify=True)`**.
+   *Tangani overlay Play Protect jika muncul (lihat SOP di bawah).*
+4. **Gerbang Verifikasi Release (Release Gate Verification - WAJIB):**
+   Panggil **`apkx_verify_install(package_name=new_package_name, expect_release=True)`**.
+   * Evaluasi hasil pengujian:
+     - **`verified == True`** dan **`debuggable == False`**: Pemasangan versi release SUKSES dan tervalidasi penuh.
+     - **`debuggable == True`**: GAGAL! Aplikasi di perangkat masih berstatus debug. Segera ulangi langkah uninstall dan pastikan build release dipasang.
+     - **`verified == False`**: GAGAL! Paket belum terpasang dengan benar di perangkat.
+5. **Uji Asap Terakhir (Final Smoke Test):**
+   * Buka aplikasi release via **`apkx_launch_app(package_name=new_package_name, restart=True)`**.
+   * Verifikasi latar depan via **`apkx_get_current_screen(expected_package=new_package_name)`**.
+   * Ambil tangkapan layar bukti final via **`apkx_take_screenshot(output_path="output/screen_final_release.png")`**.
+
+---
+
+### SOP Penanganan Google Play Protect Dialog / Overlay
+Saat memasang APK release tanpa tanda tangan Google Play Store, Android atau Google Play Services dapat menampilkan dialog/overlay transparan pemblokir (`com.android.vending.transparentmainactivity.HsdpAlias` atau dialog "Unsafe app blocked"):
+
+1. **Deteksi Overlay:**
+   Panggil **`apkx_get_current_screen(expected_package=new_package_name)`**.
+   Jika `is_overlay_active == True` atau `package_name == "com.android.vending"`:
+2. **Interaksi Dialog UI:**
+   * Cari opsi rincian: `apkx_find_ui_element(query="More details")` atau variasi teks bahasa lokal ("Rincian selengkapnya", "Detail").
+   * Jika ditemukan, lakukan tap pada koordinat tengah: `apkx_interact(action="tap", x=center[0], y=center[1])`.
+   * Cari tombol lanjutkan: `apkx_find_ui_element(query="Install anyway")` atau "Tetap instal".
+   * Jika ditemukan, lakukan tap: `apkx_interact(action="tap", x=center[0], y=center[1])`.
+3. **Penutupan Overlay Aman:**
+   Jika dialog/overlay Play Protect masih menutupi layar setelah instalasi selesai, tutup overlay tersebut menggunakan tool:
+   **`apkx_force_stop_app(package_name="com.android.vending")`**.
+   > [!WARNING] PERINGATAN KESELAMATAN
+   > Dilarang mencoba perintah modifikasi pengaturan global seperti `settings put global verifier_verify_adb_installs 0`. Selalu gunakan alur interaksi semantik UI atau `apkx_force_stop_app` di atas.
 
 ---
 
 ## 3. Ringkasan Toolkit MCP untuk Otomasi Agen
 
-| Tool MCP | Fungsi Utama |
-| :--- | :--- |
-| `apkx_list_devices` | Pre-flight check & status kesiapan HP terhubung lengkap dengan hardware specs |
-| `apkx_list_apps` | Daftar aplikasi terpasang dengan nama ramah pengguna |
-| `apkx_get_app_info` | Audit teknis cepat (versi, SDK, permission) tanpa unduh APK |
-| `apkx_pull_and_extract` | Tarik APK/APKS & ekstrak seluruh artefak blueprint |
-| `apkx_get_manifest` | Baca AndroidManifest.xml terdekode |
-| `apkx_get_endpoints` | Ekstrak seluruh backend URL dan domain |
-| `apkx_search_endpoints` | Cari rute API spesifik (auth, v1, users) |
-| `apkx_get_class_skeleton`| Struktur kelas & modul DEX tanpa token bloat |
-| `apkx_inspect_class` | Dekompilasi on-demand 1 kelas via JADX |
-| `apkx_find_classes` | Cari kelas kunci (Repository, ViewModel, Auth) |
-| **`apkx_extract_sqlite_schema`** | **Ekstrak tabel & kolom SQLite dari `libapp.so` / DEX** |
-| **`apkx_install_apk`** | **Pasang file APK ke perangkat fisik (auto flag -r, -g, -d & diagnosa error)** |
-| **`apkx_uninstall_app`** | **Hapus instalasi aplikasi dari perangkat untuk reinstall bersih** |
-| **`apkx_launch_app`** | **Buka aplikasi target/kloningan di HP (`am start -S`)** |
-| **`apkx_take_screenshot`** | **Ambil tangkapan layar perangkat via `adb exec-out`** |
-| **`apkx_dump_ui_hierarchy`** | **Dapatkan posisi tengah `[center_x, center_y]` seluruh tombol** |
-| **`apkx_interact`** | **Eksekusi tap, back, home, swipe, atau input teks** |
-| **`apkx_ensure_device_awake`** | **Bangunkan layar, auto-unlock PIN/swipe, aktifkan stay awake** |
-| **`apkx_get_current_screen`** | **Deteksi nama Activity & proses PID yang sedang tampil di layar** |
-| **`apkx_get_app_logs`** | **Perekam log error & crash tertarget khusus aplikasi target** |
-| **`apkx_reset_app_data`** | **Reset data instan (`pm clear`) untuk uji fresh-install state** |
-| **`apkx_open_deep_link`** | **Lompat langsung ke sub-layar via URL/Deep Link Intent** |
-| **`apkx_toggle_night_mode`** | **Uji responsivitas tema sistem Dark Mode vs Light Mode** |
+| Tool MCP | Parameter Kunci | Fungsi Utama |
+| :--- | :--- | :--- |
+| `apkx_list_devices` | *(none)* | Pre-flight check & status kesiapan HP terhubung lengkap dengan hardware specs |
+| `apkx_list_apps` | `query`, `include_system_apps`, `device_id` | Daftar aplikasi terpasang dengan filter query cepat |
+| `apkx_get_app_info` | `package_name`, `device_id` | Audit teknis cepat (versi, SDK, permission) tanpa unduh APK |
+| `apkx_pull_and_extract` | `package_name`, `output_dir`, `device_id` | Tarik APK/APKS & ekstrak seluruh artefak blueprint |
+| `apkx_get_manifest` | `target_path` | Baca AndroidManifest.xml terdekode dari direktori atau berkas APK/APKS |
+| `apkx_get_endpoints` | `target_path` | Ekstrak seluruh backend URL dan domain dari berkas analisis |
+| `apkx_search_endpoints` | `target_path`, `query` | Cari rute API spesifik (auth, v1, users) |
+| `apkx_get_class_skeleton`| `target_path`, `max_lines` | Struktur kelas & modul DEX tanpa token bloat |
+| `apkx_inspect_class` | `target_path`, `class_name` | Dekompilasi on-demand 1 kelas via JADX |
+| `apkx_find_classes` | `target_path`, `query` | Cari kelas kunci (Repository, ViewModel, Auth) |
+| **`apkx_extract_sqlite_schema`** | `target_path` | **Ekstrak tabel & kolom SQLite dari `libapp.so` / DEX** |
+| **`apkx_install_apk`** | `apk_path`, `reinstall`, `grant_permissions`, `allow_downgrade`, `verify` | **Pasang file APK ke perangkat fisik (default safe release, verifikasi otomatis & diagnosa error)** |
+| **`apkx_uninstall_app`** | `package_name`, `keep_data`, `device_id` | **Hapus instalasi aplikasi dari perangkat untuk reinstall bersih** |
+| **`apkx_launch_app`** | `package_name`, `activity_name`, `restart`, `device_id` | **Buka aplikasi target/kloningan di HP (`am start -S`)** |
+| **`apkx_take_screenshot`** | `output_path`, `device_id` | **Ambil tangkapan layar perangkat berkecepatan tinggi** |
+| **`apkx_dump_ui_hierarchy`** | `compressed`, `device_id` | **Dapatkan posisi tengah `[center_x, center_y]` seluruh elemen UI** |
+| **`apkx_find_ui_element`** | `query`, `by`, `exact`, `case_sensitive`, `device_id` | **Pencarian elemen UI semantik berdasarkan teks, ID, deskripsi atau kelas dengan kalkulasi koordinat otomatis** |
+| **`apkx_interact`** | `action`, `x`, `y`, `duration_ms`, `count`, `text`, `device_id` | **Eksekusi tap, long_press, back, home, recent_apps, backspace, swipe, atau input teks** |
+| **`apkx_ensure_device_awake`** | `device_id` | **Bangunkan layar, auto-unlock PIN/swipe, aktifkan stay awake** |
+| **`apkx_get_current_screen`** | `expected_package`, `device_id` | **Deteksi Activity, PID, status overlay (Play Protect), dan verifikasi foreground** |
+| **`apkx_get_app_logs`** | `package_name`, `lines`, `device_id` | **Perekam log error & crash tertarget khusus aplikasi target** |
+| **`apkx_reset_app_data`** | `package_name`, `device_id` | **Reset data instan (`pm clear`) untuk uji fresh-install state** |
+| **`apkx_open_deep_link`** | `url`, `device_id` | **Lompat langsung ke sub-layar via URL/Deep Link Intent** |
+| **`apkx_toggle_night_mode`** | `enable`, `device_id` | **Uji responsivitas tema sistem Dark Mode vs Light Mode** |
+| **`apkx_diagnostics`** | `action`, `package_name`, `prop_name`, `category`, `device_id` | **Inspeksi sistem aman allowlist (battery, meminfo, getprop, disk, display, package_path, network)** |
+| **`apkx_force_stop_app`** | `package_name`, `device_id` | **Hentikan paksa aplikasi latar belakang atau overlay nakal dengan proteksi sistem** |
+| **`apkx_verify_install`** | `package_name`, `expect_release`, `device_id` | **Verifikasi status instalasi, flags paket, dan konfirmasi rilis produksi (debuggable=False)** |
+| **`apkx_grant_permission`** | `package_name`, `permission`, `device_id` | **Berikan izin runtime Android secara selektif dengan normalisasi nama** |
