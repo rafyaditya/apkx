@@ -307,14 +307,29 @@ apkx update
 apkx update --check
 ```
 
+### 16. Orkestrasi Swarm Multi-Agent (Antigravity v1.5.5+)
+Hasilkan cetak biru orkestrasi Swarm multi-agen yang siap dieksekusi oleh AI Coding Agent (seperti Google Antigravity dengan perintah `/swarm`):
+```bash
+# Tampilkan pembagian roster dan perintah /swarm rekomendasi:
+apkx swarm whatsapp
+
+# Tentukan target framework rekonstruksi (flutter, react-native, native):
+apkx swarm com.example.app -f flutter
+
+# Keluarkan skema roster dan starter brief dalam format JSON untuk otomasi agen:
+apkx swarm whatsapp --json
+```
+Perintah ini menetapkan aturan **Single-Device-Controller** (hanya 1 agen hardware yang mengakses ADB secara bergantian) dan membagi rekonstruksi software secara paralel ke beberapa builder (`builder-data`, `builder-api`, `builder-ui`, `code-verifier`).
+
 ---
 
 ## Ringkasan Argumen dan Opsi (CLI Reference)
 
 | Argumen / Opsi | Alias | Tipe | Keterangan |
 | :--- | :--- | :--- | :--- |
-| `[query]` | - | String | Nama aplikasi, package ID, atau sub-perintah (`devices`, `screenshot`, `install`, `uninstall`, `logs`, `dump-ui`, `wake`, `serve`, `setup`, `update`). |
-| `[target]` | - | String | Target berkas APK/APKS atau nama package untuk perintah `install`, `uninstall`, dan `logs`. |
+| `[query]` | - | String | Nama aplikasi, package ID, atau sub-perintah (`devices`, `screenshot`, `install`, `uninstall`, `logs`, `dump-ui`, `wake`, `serve`, `setup`, `update`, `swarm`). |
+| `[target]` | - | String | Target berkas APK/APKS atau nama package untuk perintah `install`, `uninstall`, `logs`, dan `swarm`. |
+| `--framework` | `-f` | String | Framework target untuk rekonstruksi pada perintah `swarm` (default: `flutter`, opsi: `react-native`, `native`). |
 | `--devices` | - | Flag | Menampilkan daftar perangkat Android yang terhubung (output JSON berupa array `List[DeviceInfo]` atau `[]` jika kosong). |
 | `--output` | `-o` | Path | Direktori utama penyimpanan hasil (default: `./output`). |
 | `--device` | `-d` | String | Serial ID perangkat spesifik jika ada lebih dari satu ponsel terhubung. |

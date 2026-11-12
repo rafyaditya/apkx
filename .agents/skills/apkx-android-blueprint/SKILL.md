@@ -262,3 +262,45 @@ Saat memasang APK release tanpa tanda tangan Google Play Store, Android atau Goo
 | **`apkx_force_stop_app`** | `package_name`, `device_id` | **Hentikan paksa aplikasi latar belakang atau overlay nakal dengan proteksi sistem** |
 | **`apkx_verify_install`** | `package_name`, `expect_release`, `device_id` | **Verifikasi status instalasi, flags paket, dan konfirmasi rilis produksi (debuggable=False)** |
 | **`apkx_grant_permission`** | `package_name`, `permission`, `device_id` | **Berikan izin runtime Android secara selektif dengan normalisasi nama** |
+
+---
+
+## 4. Orkestrasi Swarm Multi-Agent (Antigravity v1.5.5+)
+
+Ketika AI Agent diminta melakukan analisis mendalam atau merekonstruksi/mengkloning aplikasi secara komprehensif, manfaatkan fitur **Swarm (`/swarm`)** untuk membagi beban kerja secara terkoordinasi.
+
+### A. Protokol Mutlak: Single-Device-Controller
+> [!CAUTION] PROTOKOL SINGLE-DEVICE-CONTROLLER
+> Perangkat fisik Android terhubung melalui satu port USB / socket ADB. DILARANG KERAS membiarkan lebih dari 1 worker memanggil tool MCP perangkat (`apkx_*`) secara bersamaan. Hanya satu agen yang memegang status aktif pada perangkat pada satu waktu:
+> - **Fase Awal (Fase 0 s.d. 4):** Dikendalikan eksklusif oleh **`device-runner`**.
+> - **Fase Rekonstruksi (Fase 6):** Akses perangkat di-pause. Seluruh builder bekerja paralel di software tanpa menyentuh ADB.
+> - **Fase Pengujian HP (Fase 7a/7b):** Dikendalikan eksklusif oleh **`live-tester`**.
+
+### B. Daftar Roster & Tanggung Jawab Anggota Swarm
+
+1. **`coordinator` (Queen / Orchestrator):**
+   * Membuka swarm, membagi tugas di papan pesan (*shared message board*), memantau kemajuan, dan melapor ke user.
+   * **Tidak menulis kode aplikasi** agar tetap responsif mengelola antrean.
+2. **`device-runner` (Hardware Specialist - Eksplorasi):**
+   * Memegang kendali eksklusif ADB pada Fase 0 s.d. 4.
+   * Menjalankan `apkx_list_devices`, `apkx_pull_and_extract`, meluncurkan target app di HP, menjelajahi layar utama, dan mengambil screenshot referensi (`apkx_take_screenshot`).
+3. **`code-analyst` (Static Reverse Engineer):**
+   * Mengurai manifest biner, skema SQLite (`apkx_extract_sqlite_schema`), backend endpoints (`apkx_get_endpoints`), dan class skeleton DEX.
+   * Memposting kontrak arsitektur (tabel DB, DTO, endpoints) ke papan pesan.
+4. **`builder-data` (Author - `workspace: "share"`):**
+   * Membangun local database layer (Drift/SQLite/Room), data models, DAOs, dan repository data.
+5. **`builder-api` (Author - `workspace: "share"`):**
+   * Membangun network layer (Dio/Retrofit), HTTP service, DTO serialization, dan error handling.
+6. **`builder-ui` (Author - `workspace: "share"`):**
+   * Membangun themes, styling, widgets, dan screens berdasarkan screenshot visual target app dengan menerapkan mobile ergonomics (Thumb-Zone, anti-slop).
+7. **`code-verifier` (Auditor - `workspace: "share"`):**
+   * Menjalankan static analysis (`flutter analyze` / `lint`) dan unit tests. Memastikan 0 errors/warnings sebelum build APK dimulai.
+8. **`live-tester` (Hardware Specialist - Dynamic QA & Deployment):**
+   * Mengambil alih perangkat fisik pada Fase 7a & 7b.
+   * Membangun APK, memasang ke HP (`apkx_install_apk`), menangani overlay Google Play Protect, melakukan pengujian sentuh end-to-end, memantau crash logcat (`apkx_get_app_logs`), dan memvalidasi APK release (`apkx_verify_install`).
+
+### C. Alur Handoff & Self-Healing Lintas Agen
+1. **Handoff ke Builder:** Setelah `device-runner` memposting screenshot dan `code-analyst` memposting skema, `coordinator` menugaskan ketiga builder secara simultan di `workspace: "share"`.
+2. **Handoff ke Verifier:** Ketika builder selesai, `code-verifier` menjalankan audit statis.
+3. **Handoff ke Device QA:** Setelah kode bersih, `live-tester` memasang APK ke ponsel fisik dan menguji alur pengguna.
+4. **Autonomous Self-Healing Loop:** Jika `live-tester` menemukan exception/crash di HP via `apkx_get_app_logs`, ia memposting cuplikan error dan me-mention builder terkait di board. Builder memperbaiki kodenya, `code-verifier` memvalidasi ulang, dan `live-tester` menguji ulang di HP secara otomatis.

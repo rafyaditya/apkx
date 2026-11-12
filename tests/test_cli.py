@@ -960,6 +960,46 @@ class TestCLIInteractiveAndProcess(unittest.TestCase):
                 self.assertEqual(res.exit_code, 0)
                 self.assertIn("Gagal mendekomposisi kelas", res.output)
 
+    def test_cli_swarm_human_mode(self):
+        res = self.runner.invoke(app, ["swarm", "whatsapp", "-f", "flutter"])
+        self.assertEqual(res.exit_code, 0)
+        self.assertIn("apkx Swarm Orchestration Blueprint", res.output)
+        self.assertIn("whatsapp", res.output)
+        self.assertIn("Flutter", res.output)
+        self.assertIn("Single-Device-Controller", res.output)
+        self.assertIn("device-runner", res.output)
+        self.assertIn("live-tester", res.output)
+
+    def test_cli_swarm_json_mode(self):
+        res = self.runner.invoke(app, ["swarm", "com.whatsapp", "--json"])
+        self.assertEqual(res.exit_code, 0)
+        data = json.loads(res.output)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["target"], "com.whatsapp")
+        self.assertEqual(data["framework"], "flutter")
+        self.assertIn("Single-Device-Controller", data["mandate"])
+        self.assertIsInstance(data["roster"], list)
+        self.assertEqual(len(data["roster"]), 8)
+        self.assertIn("device-runner", data["briefs"])
+        self.assertIn("live-tester", data["briefs"])
+        self.assertIn("/swarm", data["recommended_command"])
+
+    def test_cli_swarm_default_target_and_framework(self):
+        res = self.runner.invoke(app, ["swarm", "--json"])
+        self.assertEqual(res.exit_code, 0)
+        data = json.loads(res.output)
+        self.assertEqual(data["target"], "com.example.app")
+        self.assertEqual(data["framework"], "flutter")
+
+    def test_cli_teamwork_alias(self):
+        res = self.runner.invoke(app, ["teamwork", "my.app", "-f", "react-native", "--json"])
+        self.assertEqual(res.exit_code, 0)
+        data = json.loads(res.output)
+        self.assertEqual(data["target"], "my.app")
+        self.assertEqual(data["framework"], "react-native")
+        self.assertEqual(data["status"], "success")
+
+
 
 if __name__ == "__main__":
     unittest.main()

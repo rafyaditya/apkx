@@ -44,6 +44,11 @@ Tujuan utama skill ini adalah memandu AI Agent dalam menganalisis berkas APK/APK
 5. **Fase 5: Sintesis Blueprint Kloning Aplikasi** (Kontrak API, skema entity data, dan daftar perbaikan UI).
 6. **Fase 6: Rekonstruksi Aplikasi Bersih** (Pembangunan arsitektur Flutter/Clean Architecture dengan standar anti-slop).
 7. **Fase 7: Post-Deployment Live Device Testing & Self-Healing Loop** (Install ke ponsel via `apkx_install_apk`, jalankan aplikasi baru via `apkx_launch_app`, verifikasi visual lewat screenshot `apkx_take_screenshot`, simulasikan input form via `apkx_interact`, dan perbaiki bug secara otomatis jika ditemukan anomali).
+
+---
+
+## 4. Orkestrasi Swarm Multi-Agent (Antigravity v1.5.5+)
+Mendukung pembagian peran terkoordinasi (Coordinator, Device Runner, Static Analyst, Parallel Builders, Code Verifier, Live Device QA) dengan kepatuhan ketat pada Single-Device-Controller Mandate.
 """
 
 

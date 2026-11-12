@@ -121,11 +121,11 @@ app = APKXTyper(
 def main(
     query: Optional[str] = typer.Argument(
         None,
-        help="Nama aplikasi/package atau sub-perintah (devices, screenshot, install, uninstall, logs, dump-ui, wake, serve, setup, update)",
+        help="Nama aplikasi/package atau sub-perintah (devices, screenshot, install, uninstall, logs, dump-ui, wake, serve, setup, update, swarm)",
     ),
     target: Optional[str] = typer.Argument(
         None,
-        help="Target file APK/APKS atau nama package untuk sub-perintah install/uninstall/logs",
+        help="Target file APK/APKS atau nama package untuk sub-perintah install/uninstall/logs/swarm",
     ),
     all_apps: bool = typer.Option(
         False,
@@ -235,6 +235,12 @@ def main(
         "--pin",
         help="PIN perangkat untuk membuka layar pada perintah wake",
     ),
+    framework: str = typer.Option(
+        "flutter",
+        "--framework",
+        "-f",
+        help="Target framework untuk rekonstruksi pada perintah swarm (flutter, react-native, native)",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -311,6 +317,172 @@ def main(
             print_banner()
         code = run_updater(check_only=check, as_json=as_json)
         raise typer.Exit(code=code)
+
+    # Mode Swarm Multi-Agent Blueprint (apkx swarm [target] [-f flutter] [--json])
+    if query in ("swarm", "teamwork"):
+        from rich.table import Table
+
+        target_name = (target or "").strip()
+        if not target_name:
+            target_name = "com.example.app"
+
+        selected_framework = framework.lower().strip() if framework else "flutter"
+        if selected_framework not in ("flutter", "react-native", "native"):
+            selected_framework = "flutter"
+
+        roster = [
+            {
+                "name": "coordinator",
+                "role": "Queen & Task Orchestrator",
+                "workspace": "inherit",
+                "access": "None (Papan Pesan)",
+                "exclusive_adb": False,
+            },
+            {
+                "name": "device-runner",
+                "role": "Hardware Specialist (Eksplorasi)",
+                "workspace": "inherit",
+                "access": "Full ADB/MCP (Fase 0-4)",
+                "exclusive_adb": True,
+            },
+            {
+                "name": "code-analyst",
+                "role": "Static Reverse Engineer",
+                "workspace": "inherit",
+                "access": "AXML, SQLite, Endpoints",
+                "exclusive_adb": False,
+            },
+            {
+                "name": "builder-data",
+                "role": "Data Layer Builder",
+                "workspace": "share",
+                "access": "None (Software)",
+                "exclusive_adb": False,
+            },
+            {
+                "name": "builder-api",
+                "role": "Network Layer Builder",
+                "workspace": "share",
+                "access": "None (Software)",
+                "exclusive_adb": False,
+            },
+            {
+                "name": "builder-ui",
+                "role": "UI/UX Builder (Thumb-Zone)",
+                "workspace": "share",
+                "access": "None (Software)",
+                "exclusive_adb": False,
+            },
+            {
+                "name": "code-verifier",
+                "role": "Static Code Auditor",
+                "workspace": "share",
+                "access": "None (Software)",
+                "exclusive_adb": False,
+            },
+            {
+                "name": "live-tester",
+                "role": "Dynamic Hardware QA & Release Gate",
+                "workspace": "inherit",
+                "access": "Full ADB/MCP (Fase 7a-7b)",
+                "exclusive_adb": True,
+            },
+        ]
+
+        starter_briefs = {
+            "device-runner": (
+                f'Anda adalah Device Specialist. Anda memegang kendali eksklusif perangkat Android via MCP apkx. '
+                f'Tugas: (1) Cek kesiapan perangkat via apkx_list_devices(). '
+                f'(2) Tarik dan ekstrak aplikasi target "{target_name}" via apkx_pull_and_extract(). '
+                f'(3) Buka aplikasi di HP via apkx_launch_app(). '
+                f'(4) Jelajahi minimal 4 layar kunci dan ambil screenshot via apkx_take_screenshot(output_path="output/screen_target_{{name}}.png"). '
+                f'(5) Post daftar screenshot dan path ekstraksi ke board jika selesai.'
+            ),
+            "code-analyst": (
+                'Anda adalah Static Reverse Engineer. '
+                'Tugas: (1) Baca manifest terdekode AndroidManifest_readable.xml. '
+                '(2) Ekstrak skema database SQLite via apkx_extract_sqlite_schema(). '
+                '(3) Ekstrak backend endpoints via apkx_get_endpoints(). '
+                '(4) Post ringkasan terstruktur skema DB, permission, dan endpoints ke board untuk referensi builder.'
+            ),
+            "builder-data": (
+                f'Anda bertanggung jawab atas Data Layer proyek {selected_framework.title()} di workspace "share". '
+                f'Tugas: Bangun SQLite/local database models, DAOs, dan entities berdasarkan skema dari code-analyst. '
+                f'Post ke board jika selesai.'
+            ),
+            "builder-api": (
+                f'Anda bertanggung jawab atas Network Layer proyek {selected_framework.title()} di workspace "share". '
+                f'Tugas: Bangun HTTP/REST client, serializer DTO, dan repository interfaces berdasarkan endpoints dari code-analyst. '
+                f'Post ke board jika selesai.'
+            ),
+            "builder-ui": (
+                f'Anda bertanggung jawab atas UI/UX proyek {selected_framework.title()} di workspace "share". '
+                f'Tugas: Baca screenshot referensi di output/screen_target_*.png. Bangun theme, screens, dan widgets dengan mobile ergonomics (Thumb-Zone, anti-slop, target sentuh >= 48dp). '
+                f'Post ke board jika selesai.'
+            ),
+            "code-verifier": (
+                f'Anda adalah Code Auditor di workspace "share". '
+                f'Tugas: Jalankan static analysis, linter, dan unit tests pada proyek {selected_framework.title()}. '
+                f'Pastikan 0 errors dan 0 warnings sebelum handoff ke live-tester.'
+            ),
+            "live-tester": (
+                f'Anda adalah Dynamic Hardware QA. Anda memegang kendali eksklusif perangkat Android untuk tahap pengujian. '
+                f'Tugas: (1) Bangun APK debug ({selected_framework}). '
+                f'(2) Pasang ke HP via apkx_install_apk(allow_downgrade=True, reinstall=True). Tangani dialog Google Play Protect jika muncul. '
+                f'(3) Buka aplikasi di HP via apkx_launch_app(), bangunkan layar via apkx_ensure_device_awake(). '
+                f'(4) Simulasikan interaksi tap/input via apkx_find_ui_element() dan apkx_interact(). '
+                f'(5) Pantau logcat crash via apkx_get_app_logs(). Jika ada error, minta perbaikan di board. '
+                f'(6) Setelah stabil, bangun versi release, pasang, dan validasi via apkx_verify_install(expect_release=True). '
+                f'(7) Ambil screenshot bukti final di HP (output/screen_final_release.png) dan laporkan ke board.'
+            ),
+        }
+
+        phases = [
+            {"phase": "Fase 0-3", "name": "Pre-flight & Reverse Engineering", "active_workers": ["device-runner", "code-analyst"]},
+            {"phase": "Fase 4", "name": "Live Target App Exploration", "active_workers": ["device-runner"]},
+            {"phase": "Fase 5", "name": "Blueprint Synthesis", "active_workers": ["coordinator", "code-analyst"]},
+            {"phase": "Fase 6", "name": "Parallel Clean Reconstruction", "active_workers": ["builder-data", "builder-api", "builder-ui", "code-verifier"]},
+            {"phase": "Fase 7a", "name": "Iterative Testing & Self-Healing", "active_workers": ["live-tester", "builder-*", "code-verifier"]},
+            {"phase": "Fase 7b", "name": "Release Handoff Gate", "active_workers": ["live-tester"]},
+        ]
+
+        recommended_cmd = f'/swarm Lakukan analisa mendalam terhadap aplikasi "{target_name}" dan rekonstruksi ke {selected_framework.title()} menggunakan blueprint apkx-android-blueprint'
+
+        if as_json:
+            print(json.dumps({
+                "status": "success",
+                "target": target_name,
+                "framework": selected_framework,
+                "mandate": "Single-Device-Controller: Only one hardware agent may access ADB at a time.",
+                "roster": roster,
+                "phases": phases,
+                "briefs": starter_briefs,
+                "recommended_command": recommended_cmd,
+            }, indent=2, ensure_ascii=False))
+            raise typer.Exit(code=0)
+
+        print_banner()
+        console.print(Panel(
+            f"[bold green]apkx Swarm Orchestration Blueprint (Antigravity v1.5.5+)[/]\n\n"
+            f"[bold white]Target Aplikasi:[/] [cyan]{target_name}[/]\n"
+            f"[bold white]Target Framework:[/] [yellow]{selected_framework.title()}[/]\n"
+            f"[bold white]Mandat Hardware:[/] [bold red]Single-Device-Controller[/] (Hanya 1 agen yang boleh mengakses ADB pada satu waktu)",
+            border_style="cyan",
+        ))
+
+        table = Table(title="Daftar Roster & Pembagian Peran Swarm", border_style="blue")
+        table.add_column("Nama Worker", style="bold cyan")
+        table.add_column("Peran Utama", style="white")
+        table.add_column("Workspace", style="yellow")
+        table.add_column("Akses Hardware (ADB)", style="green")
+
+        for r in roster:
+            table.add_row(r["name"], r["role"], r["workspace"], r["access"])
+        console.print(table)
+        console.print("\n[bold white]Cara Menjalankan di AI Agent / Antigravity:[/]")
+        console.print(f"  [bold yellow]{recommended_cmd}[/]\n")
+        raise typer.Exit(code=0)
+
 
     adb = ADBManager()
     packager = APKPackager(adb)
